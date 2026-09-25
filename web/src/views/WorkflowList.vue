@@ -1,7 +1,7 @@
 <template>
   <div class="workflow-page">
     <PageHeader title="工作流编排" desc="按顺序加步骤组成调用链；列表「编码」即开放调用用的 workflowCode，发布后可供调度或开放平台调用。">
-      <el-button type="primary" @click="goCreate">新建工作流</el-button>
+      <el-button v-if="canWrite" type="primary" @click="goCreate">新建工作流</el-button>
     </PageHeader>
 
     <PageState :error="loadError" @retry="boot" />
@@ -28,7 +28,7 @@
         <div class="flow-body">
           <strong>添加步骤</strong>
             <p>从「添加接口」点选组件，配置参数组成调用链</p>
-          <el-button type="primary" link @click="goCreate">新建工作流</el-button>
+          <el-button v-if="canWrite" type="primary" link @click="goCreate">新建工作流</el-button>
         </div>
       </div>
       <div class="flow-arrow">→</div>
@@ -149,7 +149,7 @@
         </el-table-column>
         <template #empty>
           <el-empty v-if="!loading && !loadError" :description="emptyText">
-            <el-button type="primary" @click="goCreate">新建工作流</el-button>
+            <el-button v-if="canWrite" type="primary" @click="goCreate">新建工作流</el-button>
             <el-button @click="$router.push('/components')">先接入接口组件</el-button>
           </el-empty>
         </template>
@@ -233,11 +233,14 @@ import { copyText, formatTime } from '@/utils/format'
 import { disableWorkflow, pageWorkflows, publishWorkflow } from '@/api/workflow'
 import { networkErrorMessage } from '@/api/http'
 import PageState from '@/components/PageState.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const GUIDE_KEY = 'qz-workflow-guide-dismissed'
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+const canWrite = computed(() => auth.hasPermission('workflow:write') || auth.canWrite.value)
 const showGuide = ref(localStorage.getItem(GUIDE_KEY) !== '1')
 const records = ref([])
 const statRecords = ref([])

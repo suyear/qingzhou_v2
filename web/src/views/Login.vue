@@ -5,7 +5,6 @@
         <div class="hero-brand-block">
           <div class="hero-brand">{{ PRODUCT_NAME }}</div>
           <div class="hero-tagline">{{ PRODUCT_TAGLINE }}</div>
-          <div class="hero-company">{{ COMPANY_NAME }}</div>
         </div>
         <h1>把接口编排成可调度、可开放的流程</h1>
         <p>组件接入 → 工作流试跑发布 → 定时或开放调用 → 运行结果可追溯</p>
@@ -23,6 +22,7 @@
           <div class="card-head">
             <div class="brand-mobile">
               <div class="brand-mobile-name">{{ PRODUCT_NAME }}</div>
+              <div class="brand-mobile-tagline">{{ PRODUCT_TAGLINE }}</div>
               <div class="brand-mobile-company">{{ COMPANY_NAME }}</div>
             </div>
             <h2>{{ bootstrapped === false ? '首次安装' : '登录控制台' }}</h2>
@@ -96,7 +96,6 @@
             </el-button>
           </el-form>
         </template>
-        <p class="login-card-foot">{{ PRODUCT_NAME }} · {{ COMPANY_NAME }}</p>
       </section>
     </div>
 
@@ -322,19 +321,10 @@ onMounted(loadStatus)
   letter-spacing: 0.02em;
 }
 .login-card {
-  padding: 36px 32px 20px;
+  padding: 36px 32px 32px;
   background: #fff;
   display: flex;
   flex-direction: column;
-}
-.login-card-foot {
-  margin: 24px 0 0;
-  padding-top: 16px;
-  border-top: 1px solid #e2e8f0;
-  font-size: 11px;
-  color: #94a3b8;
-  text-align: center;
-  letter-spacing: 0.02em;
 }
 .brand-mobile {
   display: none;
@@ -345,10 +335,15 @@ onMounted(loadStatus)
   font-weight: 750;
   color: #0f172a;
 }
-.brand-mobile-company {
+.brand-mobile-tagline {
   margin-top: 4px;
   font-size: 12px;
   color: #64748b;
+}
+.brand-mobile-company {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #94a3b8;
 }
 .card-head h2 {
   margin: 0 0 6px;

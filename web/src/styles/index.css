@@ -942,7 +942,7 @@ button.qz-stat-card {
     display: none;
   }
   .qz-brand-company {
-    max-width: 160px;
+    display: none;
   }
 }
 

@@ -9,7 +9,7 @@
         <div class="qz-brand-company">{{ COMPANY_NAME }}</div>
       </div>
       <div class="qz-header-page">
-        <span class="qz-header-page-pill">{{ currentTitle }}</span>
+        <span v-if="showPagePill" class="qz-header-page-pill">{{ currentTitle }}</span>
       </div>
       <div class="qz-header-user">
         <el-dropdown trigger="click" @command="onUserCommand">
@@ -139,9 +139,11 @@ const visibleGroups = computed(() =>
     .filter((g) => g.items.length > 0),
 )
 
+const showPagePill = computed(() => !!route.meta.full)
+
 const currentTitle = computed(() => {
   if (route.path.startsWith('/designer')) {
-    return '工作流设计器'
+    return '编排中'
   }
   return PAGE_TITLES[route.path] || PRODUCT_NAME
 })

@@ -19,7 +19,6 @@
         :class="{ active: entryMode === item.value }"
         @click="switchEntry(item.value)"
       >
-        <span class="entry-icon">{{ item.icon }}</span>
         <span class="entry-label">{{ item.label }}</span>
         <span v-if="item.sub" class="entry-sub">{{ item.sub }}</span>
       </button>
@@ -334,9 +333,9 @@ const props = defineProps({
 const emit = defineEmits(['update:visible', 'save'])
 
 const entryOptions = [
-  { value: 'easy', label: '接入接口', sub: '填地址或 curl', icon: '🔗' },
-  { value: 'sql', label: '数据库脚本', sub: '写 SQL 当接口', icon: '🗄️' },
-  { value: 'health', label: '先体验一下', sub: '免配置', icon: '💚' },
+  { value: 'easy', label: '接入接口', sub: '填地址或 curl' },
+  { value: 'sql', label: '数据库脚本', sub: '写 SQL 当接口' },
+  { value: 'health', label: '先体验一下', sub: '免配置快速试通' },
 ]
 
 const simpleMethodOptions = [
@@ -910,13 +909,14 @@ watch(() => props.visible, (open) => {
 .entry-btn {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 10px 8px;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
   border: 1px solid var(--qz-border);
   border-radius: var(--qz-radius);
   background: var(--qz-card);
   cursor: pointer;
+  text-align: left;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .entry-btn:hover,
@@ -924,9 +924,8 @@ watch(() => props.visible, (open) => {
   border-color: var(--el-color-primary);
   box-shadow: 0 0 0 2px var(--qz-primary-soft);
 }
-.entry-icon { font-size: 20px; }
-.entry-label { font-size: 13px; font-weight: 600; white-space: nowrap; }
-.entry-sub { font-size: 11px; color: var(--qz-text-muted); white-space: nowrap; }
+.entry-label { font-size: 13px; font-weight: 650; white-space: nowrap; color: var(--qz-text); }
+.entry-sub { font-size: 12px; color: var(--qz-text-muted); line-height: 1.4; }
 .step-banner {
   margin-bottom: 16px;
   padding: 12px 14px;

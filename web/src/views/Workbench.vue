@@ -1,14 +1,6 @@
 <template>
   <div>
-    <PageHeader title="工作台" desc="看看今天跑得怎样，以及接下来该做什么。">
-      <template v-if="chartsExpanded">
-        <el-radio-group v-model="days" size="small" @change="loadDashboard">
-          <el-radio-button :value="7">近 7 日</el-radio-button>
-          <el-radio-button :value="14">近 14 日</el-radio-button>
-          <el-radio-button :value="30">近 30 日</el-radio-button>
-        </el-radio-group>
-      </template>
-    </PageHeader>
+    <PageHeader title="工作台" desc="看看今天跑得怎样，以及接下来该做什么。" />
     <PageState :error="loadError" @retry="load" />
 
     <div class="stat-grid" v-loading="loading && !overview">
@@ -35,19 +27,6 @@
         <div class="stat-hint">{{ durationHint }}</div>
       </button>
     </div>
-
-    <el-alert
-      v-if="actionItems?.recentFailures > 0 || actionItems?.licenseExpiringSoon"
-      class="guide-alert"
-      type="warning"
-      show-icon
-      :closable="false"
-      :title="actionTitle"
-      :description="actionDesc"
-    >
-      <el-button v-if="actionItems?.recentFailures > 0" type="primary" size="small" @click="$router.push('/executions?filter=problem')">查看失败</el-button>
-      <el-button v-if="actionItems?.licenseExpiringSoon" size="small" @click="$router.push('/settings')">License</el-button>
-    </el-alert>
 
     <!-- 空态：三步旅程 -->
     <div v-if="!loading && !loadError && isEmptyJourney" class="journey-grid">
@@ -77,22 +56,25 @@
           <el-button v-if="auth.canWrite.value" @click="$router.push('/designer')">新建编排</el-button>
           <el-button @click="$router.push('/schedules')">定时调度</el-button>
           <el-button @click="$router.push('/openapi')">开放平台</el-button>
-          <el-button v-if="summary.rangeFailed > 0" type="warning" plain @click="$router.push('/executions?filter=problem')">
-            查看失败
-          </el-button>
         </div>
       </div>
 
       <el-alert
-        v-if="!loading && !loadError && summary.rangeFailed > 0"
+        v-if="actionItems?.recentFailures > 0 || actionItems?.licenseExpiringSoon || summary.rangeFailed > 0"
         class="guide-alert"
         type="warning"
         show-icon
         :closable="false"
-        :title="`近 ${days} 日有 ${summary.rangeFailed} 次失败或超时`"
-        description="打开运行结果里的「失败与超时」，从触发来源点到出错节点。"
+        :title="actionTitle"
+        :description="actionDesc"
       >
-        <el-button type="primary" size="small" @click="$router.push('/executions?filter=problem')">去查看</el-button>
+        <el-button
+          v-if="actionItems?.recentFailures > 0 || summary.rangeFailed > 0"
+          type="primary"
+          size="small"
+          @click="$router.push('/executions?filter=problem')"
+        >查看失败</el-button>
+        <el-button v-if="actionItems?.licenseExpiringSoon" size="small" @click="$router.push('/settings')">License</el-button>
       </el-alert>
     </template>
 
@@ -321,13 +303,14 @@ const chartsExpanded = ref(false)
 
 const actionTitle = computed(() => {
   if (actionItems.value?.licenseExpiringSoon) return 'License 即将到期'
-  return `近 7 日有 ${actionItems.value?.recentFailures || 0} 次失败待处理`
+  const n = actionItems.value?.recentFailures || summary.value.rangeFailed || 0
+  return `近 ${days.value} 日有 ${n} 次失败或超时`
 })
 const actionDesc = computed(() => {
   if (actionItems.value?.licenseExpiringSoon) {
     return actionItems.value.licenseMessage || '请尽快更新 License'
   }
-  return '打开运行结果里的「失败与超时」排查。'
+  return '打开运行结果里的「失败与超时」，从触发来源点到出错节点。'
 })
 
 const summary = computed(() => overview.value?.summary || {

@@ -1,5 +1,7 @@
 <template>
   <div class="designer">
+    <PageState v-if="bootError" :error="bootError" @retry="retryBootstrap" />
+    <template v-else>
     <div class="toolbar">
       <div class="tb-left">
         <div class="crumb">
@@ -16,9 +18,9 @@
           <span class="step-pill" :class="{ active: allConfigured && form.status !== 'PUBLISHED', done: form.status === 'PUBLISHED' }">③ 试跑</span>
           <span class="step-pill" :class="{ active: form.status === 'PUBLISHED', done: form.status === 'PUBLISHED' }">④ 发布</span>
         </div>
+        <el-button :loading="running" @click="tryRun">试运行</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
-        <el-button type="success" :loading="running" @click="tryRun">试运行</el-button>
-        <el-button type="warning" :loading="publishing" @click="publish">发布</el-button>
+        <el-button type="primary" plain :loading="publishing" @click="publish">发布</el-button>
         <el-tag v-if="dirty" size="small" type="warning">未保存</el-tag>
         <span v-else-if="lastSavedAt" class="saved-hint">已保存 {{ lastSavedAt }}</span>
       </div>
@@ -187,6 +189,7 @@
         </div>
       </el-form>
     </el-drawer>
+    </template>
   </div>
 </template>
 
@@ -194,6 +197,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import PageState from '@/components/PageState.vue'
 import { askConfirm } from '@/utils/confirm'
 import { Graph } from '@antv/x6'
 import { Snapline } from '@antv/x6-plugin-snapline'
@@ -204,6 +208,7 @@ import { pageComponents } from '@/api/component'
 import { pageCredentials } from '@/api/credential'
 import { createWorkflow, getWorkflow, publishWorkflow, tryRunWorkflow, updateWorkflow } from '@/api/workflow'
 import { getExecution } from '@/api/execution'
+import { networkErrorMessage } from '@/api/http'
 import { fieldsToSchema, schemaFields, schemaToFields, toNodeData, urlPath } from '@/utils/schema'
 import {
   applyBindingsToNodeData,
@@ -233,6 +238,7 @@ const canvasRef = ref(null)
 const saving = ref(false)
 const publishing = ref(false)
 const running = ref(false)
+const bootError = ref('')
 const logVisible = ref(false)
 const tryRunDialogVisible = ref(false)
 const publishSuccessVisible = ref(false)
@@ -1005,6 +1011,7 @@ async function confirmTryRun() {
 }
 
 async function bootstrap() {
+  bootError.value = ''
   ready = false
   hydrating = true
   const [list, creds] = await Promise.all([
@@ -1034,6 +1041,14 @@ async function bootstrap() {
   await nextTick()
   markClean()
   ready = true
+}
+
+async function retryBootstrap() {
+  try {
+    await bootstrap()
+  } catch (e) {
+    bootError.value = networkErrorMessage(e) || '设计器加载失败，请确认后端服务已启动'
+  }
 }
 
 async function confirmLeave() {
@@ -1126,9 +1141,7 @@ function onWindowResize() {
 onMounted(() => {
   window.addEventListener('beforeunload', onBeforeUnload)
   window.addEventListener('resize', onWindowResize)
-  bootstrap().catch(() => {
-    ElMessage.error('设计器加载失败，请确认后端服务已启动（默认 18080）')
-  })
+  retryBootstrap()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload)
