@@ -1,18 +1,7 @@
 <template>
   <div class="openapi-page">
     <PageHeader title="开放平台" desc="把接口服务与组合接口服务授权给外部应用，同一套签名即可调用。">
-      <template v-if="pageTab === 'apps'">
-        <el-input
-          v-model="keyword"
-          class="search-input"
-          placeholder="搜索应用名称 / App Key"
-          clearable
-          @keyup.enter="load"
-          @clear="load"
-        />
-        <el-button @click="load">查询</el-button>
-        <el-button type="primary" @click="openCreate">新建应用</el-button>
-      </template>
+      <el-button v-if="pageTab === 'apps'" type="primary" @click="openCreate">新建应用</el-button>
       <el-button v-else text type="primary" @click="pageTab = 'apps'">返回应用管理</el-button>
     </PageHeader>
 
@@ -25,6 +14,18 @@
           接入文档
         </button>
       </div>
+    </div>
+
+    <div v-if="pageTab === 'apps'" class="filter-bar qz-panel">
+      <el-input
+        v-model="keyword"
+        class="search-input"
+        placeholder="搜索应用名称 / App Key"
+        clearable
+        @keyup.enter="load"
+        @clear="load"
+      />
+      <el-button type="primary" @click="load">查询</el-button>
     </div>
 
     <PageState v-if="pageTab === 'apps'" :error="loadError" @retry="load" />
@@ -84,7 +85,7 @@
 
       <div class="qz-panel">
         <el-table
-          class="qz-table app-table"
+          class="qz-table is-clickable app-table"
           :data="records"
           v-loading="loading"
           stripe
@@ -241,7 +242,7 @@
     </el-dialog>
 
     <!-- 编辑 -->
-    <el-dialog v-model="editVisible" title="应用设置" width="500px">
+    <el-dialog v-model="editVisible" title="应用设置" width="500px" destroy-on-close>
       <el-form label-position="top">
         <el-form-item label="应用名称" required>
           <el-input v-model="editForm.appName" />
@@ -1280,11 +1281,6 @@ onMounted(async () => {
 .app-remark { font-size: 12px; color: var(--qz-text-muted); }
 .key-cell { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .copy-btn { flex-shrink: 0; }
-.table-foot {
-  margin: 10px 16px 12px;
-  font-size: 12px;
-  color: var(--qz-text-muted);
-}
 .docs-panel { padding: 16px 20px; }
 .empty-hint { margin: 0 0 12px; color: var(--qz-text-muted); font-size: 13px; }
 .drawer-stack { display: flex; flex-direction: column; gap: 12px; }

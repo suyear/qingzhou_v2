@@ -1,12 +1,21 @@
 <template>
   <el-container class="qz-layout" direction="vertical">
-    <el-header class="qz-header" height="56px">
-      <div class="qz-brand">轻舟<small>低代码集成调度中台</small></div>
-      <div class="qz-header-page">{{ currentTitle }}</div>
+    <el-header class="qz-header" height="60px">
+      <div class="qz-brand">
+        <div class="qz-brand-mark">
+          <span class="qz-brand-name">{{ PRODUCT_NAME }}</span>
+          <small>{{ PRODUCT_TAGLINE }}</small>
+        </div>
+        <div class="qz-brand-company">{{ COMPANY_NAME }}</div>
+      </div>
+      <div class="qz-header-page">
+        <span class="qz-header-page-pill">{{ currentTitle }}</span>
+      </div>
       <div class="qz-header-user">
         <el-dropdown trigger="click" @command="onUserCommand">
-          <span class="user-trigger">
-            {{ auth.user.value?.displayName || auth.user.value?.username || '用户' }}
+          <span class="qz-user-trigger">
+            <span class="qz-user-avatar">{{ userInitial }}</span>
+            <span class="qz-user-name">{{ displayName }}</span>
             <el-icon><ArrowDown /></el-icon>
           </span>
           <template #dropdown>
@@ -26,18 +35,22 @@
           class="qz-menu"
           :default-active="activeMenu"
           router
-          background-color="#0f172a"
+          :background-color="'transparent'"
           text-color="#94a3b8"
           active-text-color="#ffffff"
         >
           <template v-for="group in visibleGroups" :key="group.key">
-            <div v-if="group.label" class="nav-group">{{ group.label }}</div>
+            <div v-if="group.label" class="qz-nav-group">{{ group.label }}</div>
             <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path">
               <el-icon><component :is="iconMap[item.icon]" /></el-icon>
               <span>{{ item.title }}</span>
             </el-menu-item>
           </template>
         </el-menu>
+        <div class="qz-aside-foot">
+          <span class="qz-aside-product">{{ PRODUCT_NAME }}</span>
+          <span class="qz-aside-company">{{ COMPANY_NAME }}</span>
+        </div>
       </el-aside>
       <el-main :class="route.meta.full ? 'qz-main-full' : 'qz-main'">
         <el-alert
@@ -93,6 +106,7 @@ import { backendUnreachable } from '@/api/http'
 import { changePassword, fetchMe, logout } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 import { MENU_GROUPS, PAGE_TITLES } from '@/utils/menus'
+import { COMPANY_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from '@/utils/brand'
 
 const iconMap = {
   HomeFilled,
@@ -129,7 +143,7 @@ const currentTitle = computed(() => {
   if (route.path.startsWith('/designer')) {
     return '工作流设计器'
   }
-  return PAGE_TITLES[route.path] || '轻舟'
+  return PAGE_TITLES[route.path] || PRODUCT_NAME
 })
 
 const activeMenu = computed(() => {
@@ -137,6 +151,15 @@ const activeMenu = computed(() => {
     return '/workflows'
   }
   return route.path
+})
+
+const displayName = computed(
+  () => auth.user.value?.displayName || auth.user.value?.username || '用户',
+)
+
+const userInitial = computed(() => {
+  const name = displayName.value.trim()
+  return name ? name.slice(0, 1).toUpperCase() : 'U'
 })
 
 const roleText = computed(() => {
@@ -195,44 +218,7 @@ onMounted(async () => {
   align-items: center;
   gap: 16px;
 }
-.qz-header-page {
-  flex: 1;
-  font-size: 14px;
-  color: #64748b;
-}
-.qz-header-user {
-  margin-left: auto;
-}
-.user-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  color: #334155;
-  font-size: 13px;
-}
-.nav-group {
-  padding: 14px 20px 6px;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: #64748b;
-  text-transform: uppercase;
-}
-.qz-menu {
-  border-right: none;
-}
-.qz-menu :deep(.el-menu-item) {
-  height: 42px;
-  margin: 2px 8px;
-  border-radius: 8px;
-}
-.qz-menu :deep(.el-menu-item:hover) {
-  background: rgba(148, 163, 184, 0.12) !important;
-}
-.qz-menu :deep(.el-menu-item.is-active) {
-  background: #2563eb !important;
-}
 .backend-alert {
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 </style>

@@ -2,7 +2,11 @@
   <div class="login-page">
     <div class="login-shell">
       <aside class="login-hero">
-        <div class="hero-brand">轻舟</div>
+        <div class="hero-brand-block">
+          <div class="hero-brand">{{ PRODUCT_NAME }}</div>
+          <div class="hero-tagline">{{ PRODUCT_TAGLINE }}</div>
+          <div class="hero-company">{{ COMPANY_NAME }}</div>
+        </div>
         <h1>把接口编排成可调度、可开放的流程</h1>
         <p>组件接入 → 工作流试跑发布 → 定时或开放调用 → 运行结果可追溯</p>
         <ul>
@@ -10,13 +14,17 @@
           <li>失败链路三段式定位</li>
           <li>角色权限控制菜单与写操作</li>
         </ul>
+        <div class="hero-foot">{{ COMPANY_NAME }}</div>
       </aside>
 
       <section class="login-card">
         <div v-if="statusLoading" class="status-loading">正在连接服务…</div>
         <template v-else>
           <div class="card-head">
-            <div class="brand-mobile">轻舟</div>
+            <div class="brand-mobile">
+              <div class="brand-mobile-name">{{ PRODUCT_NAME }}</div>
+              <div class="brand-mobile-company">{{ COMPANY_NAME }}</div>
+            </div>
             <h2>{{ bootstrapped === false ? '首次安装' : '登录控制台' }}</h2>
             <p class="sub">
               {{ bootstrapped === false ? '创建管理员账号后即可开始使用' : '使用管理员分配的账号登录' }}
@@ -88,6 +96,7 @@
             </el-button>
           </el-form>
         </template>
+        <p class="login-card-foot">{{ PRODUCT_NAME }} · {{ COMPANY_NAME }}</p>
       </section>
     </div>
 
@@ -114,6 +123,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { bootstrap, bootstrapStatus, changePassword, login } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
+import { COMPANY_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from '@/utils/brand'
 
 const REMEMBER_KEY = 'qz_login_username'
 
@@ -260,12 +270,29 @@ onMounted(loadStatus)
   padding: 40px 36px;
   color: #e2e8f0;
   background: linear-gradient(165deg, #0f172a 0%, #1e3a8a 100%);
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.hero-brand-block {
+  margin-bottom: 28px;
 }
 .hero-brand {
   font-size: 28px;
   font-weight: 750;
   letter-spacing: 0.04em;
-  margin-bottom: 28px;
+  color: #fff;
+}
+.hero-tagline {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+.hero-company {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #64748b;
+  letter-spacing: 0.02em;
 }
 .login-hero h1 {
   margin: 0 0 12px;
@@ -287,16 +314,41 @@ onMounted(loadStatus)
   font-size: 13px;
   line-height: 1.9;
 }
+.hero-foot {
+  margin-top: auto;
+  padding-top: 28px;
+  font-size: 11px;
+  color: #64748b;
+  letter-spacing: 0.02em;
+}
 .login-card {
-  padding: 36px 32px 32px;
+  padding: 36px 32px 20px;
   background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+.login-card-foot {
+  margin: 24px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 11px;
+  color: #94a3b8;
+  text-align: center;
+  letter-spacing: 0.02em;
 }
 .brand-mobile {
   display: none;
+  margin-bottom: 12px;
+}
+.brand-mobile-name {
   font-size: 22px;
   font-weight: 750;
   color: #0f172a;
-  margin-bottom: 8px;
+}
+.brand-mobile-company {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #64748b;
 }
 .card-head h2 {
   margin: 0 0 6px;

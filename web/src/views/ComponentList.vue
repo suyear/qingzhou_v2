@@ -134,7 +134,7 @@
     </div>
 
     <div v-else class="qz-panel">
-      <el-table class="qz-table" :data="records" v-loading="loading" stripe @row-click="openDetail">
+      <el-table class="qz-table is-clickable" :data="records" v-loading="loading" stripe highlight-current-row @row-click="openDetail">
         <el-table-column label="名称" min-width="150">
           <template #default="{ row }">
             <div class="name-cell">
@@ -214,6 +214,7 @@
           @current-change="load"
         />
       </div>
+      <p v-if="viewMode === 'table' && records.length" class="table-foot">点击行查看详情 · 共 {{ total }} 条</p>
     </div>
 
     <div v-if="viewMode === 'card' && total > 0" class="pager card-pager">

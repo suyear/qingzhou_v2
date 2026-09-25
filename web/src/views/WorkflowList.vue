@@ -1,7 +1,13 @@
 <template>
   <div class="workflow-page">
     <PageHeader title="工作流编排" desc="按顺序加步骤组成调用链；列表「编码」即开放调用用的 workflowCode，发布后可供调度或开放平台调用。">
-      <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 120px" @change="reload">
+      <el-button type="primary" @click="goCreate">新建工作流</el-button>
+    </PageHeader>
+
+    <PageState :error="loadError" @retry="boot" />
+
+    <div class="filter-bar qz-panel">
+      <el-select v-model="statusFilter" placeholder="全部状态" clearable class="filter-sm" @change="reload">
         <el-option label="草稿" value="DRAFT" />
         <el-option label="已发布" value="PUBLISHED" />
         <el-option label="已停用" value="DISABLED" />
@@ -14,12 +20,8 @@
         @keyup.enter="reload"
         @clear="reload"
       />
-      <el-button @click="reload">查询</el-button>
-      <el-button type="primary" @click="goCreate">新建工作流</el-button>
-    </PageHeader>
-
-    <PageState :error="loadError" @retry="boot" />
-
+      <el-button type="primary" @click="reload">查询</el-button>
+    </div>
     <div v-if="showGuide" class="flow-strip">
       <div class="flow-step" :class="{ done: statTotal > 0 }">
         <span class="flow-badge">1</span>
@@ -80,7 +82,7 @@
 
     <div class="qz-panel">
       <el-table
-        class="qz-table workflow-table"
+        class="qz-table is-clickable workflow-table"
         :data="records"
         v-loading="loading"
         stripe
@@ -482,11 +484,6 @@ async function boot() {
 .draft-tag { font-size: 11px; color: var(--el-color-warning); }
 .sub { margin-top: 4px; font-size: 12px; color: var(--qz-text-muted); }
 .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
-.table-foot {
-  margin: 0 16px 12px;
-  font-size: 12px;
-  color: var(--qz-text-muted);
-}
 .drawer-stack { display: flex; flex-direction: column; gap: 12px; }
 .drawer-tags { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .drawer-meta { margin-top: 14px; }

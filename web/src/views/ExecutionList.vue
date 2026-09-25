@@ -118,7 +118,7 @@
 
     <div class="qz-panel">
       <el-table
-        class="qz-table"
+        class="qz-table is-clickable"
         :data="records"
         v-loading="loading"
         stripe
@@ -210,6 +210,7 @@
           @current-change="onPageChange"
         />
       </div>
+      <p v-if="records.length" class="table-foot">点击行查看执行链路 · 共 {{ total }} 条</p>
     </div>
 
     <ExecutionChainDrawer ref="chainDrawer" :replay-loading="replaying" @replay="onReplay" />
@@ -530,19 +531,6 @@ onMounted(async () => {
 
 <style scoped>
 .execution-page { padding-bottom: 8px; }
-.filter-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 14px;
-  margin-bottom: 14px;
-}
-.filter-date { width: 340px; }
-.filter-wf { width: 180px; }
-.filter-sm { width: 120px; }
-.filter-ms { width: 128px; }
-.filter-keyword { width: 220px; }
 .toolbar-row {
   display: flex;
   align-items: center;
@@ -588,20 +576,8 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--qz-text-muted);
 }
-.pager {
-  display: flex;
-  justify-content: flex-end;
-  padding: 12px 16px;
-}
 .sub { color: var(--qz-text-muted); font-size: 12px; }
 .err { color: var(--qz-danger); font-size: 12px; }
 .muted { color: var(--qz-text-muted); }
 .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
-@media (max-width: 1100px) {
-  .filter-date,
-  .filter-wf,
-  .filter-keyword { width: 100%; max-width: 100%; }
-  .filter-sm,
-  .filter-ms { width: calc(50% - 4px); }
-}
 </style>

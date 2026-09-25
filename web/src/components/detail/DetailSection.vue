@@ -58,6 +58,6 @@ defineProps({
   flex-shrink: 0;
 }
 .qz-section__body {
-  padding: 14px;
+  padding: 14px 14px 16px;
 }
 </style>

@@ -1,6 +1,12 @@
 <template>
   <div>
     <PageHeader title="定时调度" desc="每隔多久、每天几点自动跑已发布的工作流。">
+      <el-button type="primary" @click="openCreate()">新建任务</el-button>
+    </PageHeader>
+
+    <PageState :error="loadError" @retry="boot" />
+
+    <div class="filter-bar qz-panel">
       <el-input
         v-model="keyword"
         class="search-input"
@@ -9,12 +15,8 @@
         @keyup.enter="reload"
         @clear="reload"
       />
-      <el-button @click="reload">查询</el-button>
-      <el-button type="primary" @click="openCreate()">新建任务</el-button>
-    </PageHeader>
-
-    <PageState :error="loadError" @retry="boot" />
-
+      <el-button type="primary" @click="reload">查询</el-button>
+    </div>
     <div v-if="!showModeHint || records.length" class="stat-grid cols-3">
       <div class="stat-card">
         <div class="stat-label">全部任务</div>
@@ -44,7 +46,14 @@
     />
 
     <div class="qz-panel">
-      <el-table class="qz-table" :data="records" v-loading="loading" stripe>
+      <el-table
+        class="qz-table is-clickable"
+        :data="records"
+        v-loading="loading"
+        stripe
+        highlight-current-row
+        @row-click="openDetail"
+      >
         <el-table-column prop="jobName" label="任务" min-width="150" />
         <el-table-column label="工作流" min-width="180">
           <template #default="{ row }">
@@ -71,7 +80,7 @@
         </el-table-column>
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
-            <div class="qz-ops">
+            <div class="qz-ops" @click.stop>
               <el-button type="primary" link @click="openEdit(row)">编辑</el-button>
               <el-button v-if="row.status !== 1" type="success" link @click="onStart(row)">启动</el-button>
               <el-button v-else type="warning" link @click="onStop(row)">停止</el-button>
@@ -80,6 +89,7 @@
                 <el-button type="primary" link>更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item command="detail">查看详情</el-dropdown-item>
                     <el-dropdown-item command="records">查看记录</el-dropdown-item>
                     <el-dropdown-item command="problems">失败链路</el-dropdown-item>
                     <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
@@ -106,14 +116,40 @@
           @current-change="load"
         />
       </div>
+      <p v-if="records.length" class="table-foot">点击行查看详情 · 共 {{ total }} 条</p>
     </div>
+
+    <el-drawer
+      v-model="drawerVisible"
+      :title="drawerRow?.jobName || '调度详情'"
+      size="560px"
+      class="qz-detail-drawer"
+    >
+      <template v-if="drawerRow">
+        <div class="drawer-stack">
+          <DetailSection title="基本信息">
+            <div class="drawer-tags">
+              <StatusTag kind="job" :value="drawerRow.status" />
+              <el-tag size="small" type="info">{{ scheduleTypeLabel(drawerRow.scheduleType) }}</el-tag>
+            </div>
+            <DetailMetaList :items="drawerMetaItems" />
+          </DetailSection>
+          <DetailActions>
+            <el-button type="primary" @click="openEdit(drawerRow); drawerVisible = false">编辑</el-button>
+            <el-button v-if="drawerRow.status !== 1" type="success" @click="onStart(drawerRow)">启动</el-button>
+            <el-button v-else type="warning" @click="onStop(drawerRow)">停止</el-button>
+            <el-button :loading="drawerRow._triggering" @click="onTrigger(drawerRow)">立即触发</el-button>
+            <el-button @click="goRecords(drawerRow)">运行记录</el-button>
+          </DetailActions>
+        </div>
+      </template>
+    </el-drawer>
 
     <el-dialog
       v-model="dialogVisible"
       :title="form.id ? '编辑调度任务' : '新建调度任务'"
       width="920px"
       destroy-on-close
-      class="schedule-dialog"
     >
       <el-alert
         v-if="!workflows.length"
@@ -125,7 +161,7 @@
       >
         <el-button type="primary" link @click="dialogVisible = false; $router.push('/workflows')">去发布</el-button>
       </el-alert>
-      <el-form :model="form" label-width="108px">
+      <el-form :model="form" label-position="top">
         <el-form-item label="工作流" required>
           <el-select
             v-model="form.workflowId"
@@ -181,6 +217,9 @@ import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import PageState from '@/components/PageState.vue'
 import StatusTag from '@/components/StatusTag.vue'
+import DetailSection from '@/components/detail/DetailSection.vue'
+import DetailMetaList from '@/components/detail/DetailMetaList.vue'
+import DetailActions from '@/components/detail/DetailActions.vue'
 import ScheduleRuleEditor from '@/components/schedule/ScheduleRuleEditor.vue'
 import ScheduleTriggerInput from '@/components/schedule/ScheduleTriggerInput.vue'
 import { askConfirm } from '@/utils/confirm'
@@ -244,6 +283,8 @@ const emptyText = computed(() => {
   return '还没有调度任务'
 })
 const dialogVisible = ref(false)
+const drawerVisible = ref(false)
+const drawerRow = ref(null)
 const saving = ref(false)
 const form = reactive({
   id: null,
@@ -341,6 +382,31 @@ function openEdit(row) {
   ruleForm.value = jobToForm(row)
   resetTriggerInput(row)
   dialogVisible.value = true
+}
+
+const drawerMetaItems = computed(() => {
+  const row = drawerRow.value
+  if (!row) return []
+  return [
+    { label: '工作流', value: workflowTitle(row.workflowId) },
+    { label: '编码', value: workflowCode(row.workflowId) || '—', mono: true },
+    { label: '规则', value: scheduleSummary(row) },
+    { label: '下次触发', value: formatTime(row.nextFireTime) },
+    { label: '上次触发', value: row.lastFireTime ? formatTime(row.lastFireTime) : '—' },
+    { label: '备注', value: row.remark || '—' },
+  ]
+})
+
+function openDetail(row) {
+  drawerRow.value = row
+  drawerVisible.value = true
+}
+
+function goRecords(row) {
+  return router.push({
+    path: '/executions',
+    query: { workflowId: String(row.workflowId), triggerType: 'SCHEDULE' },
+  })
 }
 
 function onWorkflowChange() {
@@ -445,11 +511,12 @@ async function onDelete(row) {
 }
 
 function onRowCommand(command, row) {
+  if (command === 'detail') {
+    openDetail(row)
+    return
+  }
   if (command === 'records') {
-    return router.push({
-      path: '/executions',
-      query: { workflowId: String(row.workflowId), triggerType: 'SCHEDULE' },
-    })
+    return goRecords(row)
   }
   if (command === 'problems') {
     return router.push({
@@ -504,11 +571,7 @@ onMounted(boot)
   font-size: 12px;
   color: var(--qz-text-muted);
 }
-</style>
-
-<style>
-.schedule-dialog .el-dialog__body {
-  max-height: 72vh;
-  overflow-y: auto;
-}
+.drawer-stack { display: flex; flex-direction: column; gap: 12px; }
+.drawer-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.hint { margin: 6px 0 0; font-size: 12px; color: var(--qz-text-muted); }
 </style>

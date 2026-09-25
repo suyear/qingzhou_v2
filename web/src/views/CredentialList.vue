@@ -1,6 +1,10 @@
 <template>
   <div>
     <PageHeader title="凭证管理" desc="保存微信、访问令牌、账号密码或数据库连接，接口和工作流里直接引用。">
+      <el-button type="primary" @click="openCreate">新建凭证</el-button>
+    </PageHeader>
+    <PageState :error="loadError" @retry="load" />
+    <div class="filter-bar qz-panel">
       <el-input
         v-model="keyword"
         class="search-input"
@@ -9,10 +13,8 @@
         @keyup.enter="load"
         @clear="load"
       />
-      <el-button @click="load">查询</el-button>
-      <el-button type="primary" @click="openCreate">新建凭证</el-button>
-    </PageHeader>
-    <PageState :error="loadError" @retry="load" />
+      <el-button type="primary" @click="load">查询</el-button>
+    </div>
     <div v-if="!showGuide && moduleStats" class="stat-grid cols-3">
       <div class="stat-card">
         <div class="stat-label">全部凭证</div>
@@ -36,7 +38,14 @@
       </div>
     </el-alert>
     <div class="qz-panel">
-    <el-table class="qz-table" :data="records" v-loading="loading" stripe>
+    <el-table
+      class="qz-table is-clickable"
+      :data="records"
+      v-loading="loading"
+      stripe
+      highlight-current-row
+      @row-click="openDetail"
+    >
       <el-table-column prop="credentialName" label="名称" min-width="150" />
       <el-table-column label="类型" width="120">
         <template #default="{ row }">
@@ -78,14 +87,22 @@
           <StatusTag kind="enable" :value="row.status" />
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="260" fixed="right">
+      <el-table-column label="操作" width="200" fixed="right">
         <template #default="{ row }">
-          <div class="qz-ops">
+          <div class="qz-ops" @click.stop>
             <el-button type="primary" link @click="openEdit(row)">编辑</el-button>
             <el-button type="primary" link :loading="row._testing" @click="onTest(row)">测连通</el-button>
-            <el-button v-if="row.status !== 1" type="success" link @click="onEnable(row)">启用</el-button>
-            <el-button v-else type="warning" link @click="onDisable(row)">停用</el-button>
-            <el-button type="danger" link @click="onDelete(row)">删除</el-button>
+            <el-dropdown trigger="click" @command="(cmd) => onRowCommand(cmd, row)">
+              <el-button type="primary" link>更多</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="detail">查看详情</el-dropdown-item>
+                  <el-dropdown-item v-if="row.status !== 1" command="enable">启用</el-dropdown-item>
+                  <el-dropdown-item v-else command="disable">停用</el-dropdown-item>
+                  <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </template>
       </el-table-column>
@@ -105,10 +122,42 @@
         @current-change="load"
       />
     </div>
+    <p v-if="records.length" class="table-foot">点击行查看详情 · 共 {{ total }} 条</p>
     </div>
 
+    <el-drawer
+      v-model="drawerVisible"
+      :title="drawerRow?.credentialName || '凭证详情'"
+      size="560px"
+      class="qz-detail-drawer"
+    >
+      <template v-if="drawerRow">
+        <div class="drawer-stack">
+          <DetailSection title="基本信息">
+            <div class="drawer-tags">
+              <StatusTag kind="enable" :value="drawerRow.status" />
+              <el-tag size="small" :type="typeTag(drawerRow.credentialType)">
+                {{ credentialTypeLabel(drawerRow.credentialType) }}
+              </el-tag>
+              <el-tag size="small" :type="drawerRow.hasSecret ? 'success' : 'danger'">
+                {{ drawerRow.hasSecret ? '密钥已配置' : '密钥未配置' }}
+              </el-tag>
+            </div>
+            <DetailMetaList :items="drawerMetaItems" />
+          </DetailSection>
+          <DetailActions>
+            <el-button type="primary" @click="openEdit(drawerRow); drawerVisible = false">编辑</el-button>
+            <el-button :loading="drawerRow._testing" @click="onTest(drawerRow)">测连通</el-button>
+            <el-button v-if="drawerRow.status !== 1" type="success" @click="onEnable(drawerRow)">启用</el-button>
+            <el-button v-else type="warning" @click="onDisable(drawerRow)">停用</el-button>
+            <el-button type="danger" @click="onDelete(drawerRow)">删除</el-button>
+          </DetailActions>
+        </div>
+      </template>
+    </el-drawer>
+
     <el-dialog v-model="dialogVisible" :title="form.id ? '编辑凭证' : '新建凭证'" width="720px" destroy-on-close>
-      <el-form :model="form" label-width="120px">
+      <el-form :model="form" label-position="top">
         <el-form-item label="名称" required>
           <el-input v-model="form.credentialName" placeholder="例如：订单库只读 / 开放平台令牌" />
         </el-form-item>
@@ -352,6 +401,9 @@ import PageHeader from '@/components/PageHeader.vue'
 import PageState from '@/components/PageState.vue'
 import DetailResultBanner from '@/components/detail/DetailResultBanner.vue'
 import DetailEmpty from '@/components/detail/DetailEmpty.vue'
+import DetailSection from '@/components/detail/DetailSection.vue'
+import DetailMetaList from '@/components/detail/DetailMetaList.vue'
+import DetailActions from '@/components/detail/DetailActions.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import AuthTypePicker from '@/components/AuthTypePicker.vue'
 import { askConfirm } from '@/utils/confirm'
@@ -437,9 +489,54 @@ function httpTarget(row) {
 }
 
 const dialogVisible = ref(false)
+const drawerVisible = ref(false)
+const drawerRow = ref(null)
 const saving = ref(false)
 const advancedAuthOpen = ref([])
 const form = reactive(createEmptyCredentialForm())
+
+const drawerMetaItems = computed(() => {
+  const row = drawerRow.value
+  if (!row) return []
+  const subtype = isHttpAuthCredential(row.credentialType)
+    ? httpAuthTypeLabel(row.authType)
+    : (isDatabaseCredential(row.credentialType) ? dbTypeLabel(row.dbType || 'mysql') : '—')
+  const conn = isDatabaseCredential(row.credentialType)
+    ? dbTarget(row)
+    : (row.credentialType === 'WECOM'
+      ? (row.corpId || '—')
+      : (isHttpAuthCredential(row.credentialType) ? httpTarget(row) : '—'))
+  return [
+    { label: '类型', value: credentialTypeLabel(row.credentialType) },
+    { label: '子类型', value: subtype },
+    { label: '作用域', value: row.scope === 'WORKFLOW' ? workflowTitle(row.workflowId) : '全局共享' },
+    { label: '连接', value: conn, mono: true },
+    { label: '备注', value: row.remark || '—' },
+  ]
+})
+
+function openDetail(row) {
+  drawerRow.value = row
+  drawerVisible.value = true
+}
+
+async function onRowCommand(cmd, row) {
+  if (cmd === 'detail') {
+    openDetail(row)
+    return
+  }
+  if (cmd === 'enable') {
+    await onEnable(row)
+    return
+  }
+  if (cmd === 'disable') {
+    await onDisable(row)
+    return
+  }
+  if (cmd === 'delete') {
+    await onDelete(row)
+  }
+}
 
 const typeHint = computed(() => {
   if (form.credentialType === 'WECOM') return '用于企业微信接口，保存后可测连通。'
@@ -653,8 +750,10 @@ onMounted(async () => {
   line-height: 1.45;
 }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.drawer-stack { display: flex; flex-direction: column; gap: 12px; }
+.drawer-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .adv-auth-collapse {
-  margin: 0 0 12px 120px;
+  margin: 0 0 12px;
 }
 .adv-auth-collapse :deep(.el-collapse-item__header) {
   font-size: 13px;

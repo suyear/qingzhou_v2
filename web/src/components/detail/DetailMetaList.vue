@@ -54,7 +54,7 @@ async function onCopy(item) {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 .qz-meta.is-grid {
   display: grid;

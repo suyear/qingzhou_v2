@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageHeader title="系统设置" desc="站点名称、开放平台地址、执行日志保留天数与健康检查。" />
+    <PageHeader title="系统设置" desc="站点名称、开放平台地址、执行日志保留天数与健康检查。产品品牌为轻舟，由南京闭环网络科技有限公司提供。" />
     <PageState :error="loadError" @retry="load" />
 
     <div class="stat-grid cols-3" v-loading="healthLoading">
@@ -101,23 +101,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-.form-panel { padding: 16px 18px 20px; margin-bottom: 12px; }
-.form-hint {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--qz-text-muted);
-  line-height: 1.4;
-}
-.stat-card.clickable {
-  cursor: pointer;
-  text-align: left;
-  border: 1px solid transparent;
-  background: var(--qz-panel, #fff);
-  font: inherit;
-  color: inherit;
-}
-.stat-card.clickable:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.08);
+.stat-num {
+  font-size: 22px;
 }
 </style>

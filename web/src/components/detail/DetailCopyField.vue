@@ -31,6 +31,10 @@ async function onCopy() {
 <style scoped>
 .qz-copy-field {
   min-width: 0;
+  margin-bottom: 12px;
+}
+.qz-copy-field:last-child {
+  margin-bottom: 0;
 }
 .qz-copy-field__label {
   margin-bottom: 6px;

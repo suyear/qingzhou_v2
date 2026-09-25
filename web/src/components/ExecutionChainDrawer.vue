@@ -4,14 +4,16 @@
     title="执行链路"
     size="800px"
     destroy-on-close
-    class="qz-chain-drawer"
+    class="qz-detail-drawer qz-chain-drawer"
     @closed="reset"
   >
     <PageState :error="error" @retry="reload" />
-    <div v-loading="loading">
+    <div v-loading="loading" class="chain-body">
       <ExecutionChainView v-if="chain" :chain="chain" />
-      <el-empty v-else-if="!loading && !error" description="请选择一条执行记录" />
-      <div v-if="chain?.instance" class="drawer-foot">
+      <DetailEmpty v-else-if="!loading && !error" text="请选择一条执行记录" />
+    </div>
+    <template #footer>
+      <DetailActions v-if="chain?.instance" stack>
         <el-button
           type="primary"
           :disabled="chain.instance.status === 'RUNNING'"
@@ -20,13 +22,15 @@
         >
           重放此单
         </el-button>
-      </div>
-    </div>
+      </DetailActions>
+    </template>
   </el-drawer>
 </template>
 
 <script setup>
 import { ref } from 'vue'
+import DetailActions from './detail/DetailActions.vue'
+import DetailEmpty from './detail/DetailEmpty.vue'
 import ExecutionChainView from './ExecutionChainView.vue'
 import PageState from './PageState.vue'
 import { getExecutionChain } from '@/api/execution'
@@ -79,7 +83,7 @@ defineExpose({ open, setChain, reload, visible })
 </script>
 
 <style scoped>
-.drawer-foot {
-  margin-top: 16px;
+.chain-body {
+  min-height: 120px;
 }
 </style>

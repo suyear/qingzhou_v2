@@ -158,19 +158,10 @@ onMounted(load)
 </script>
 
 <style scoped>
-.form-panel { padding: 16px 18px 20px; margin-bottom: 12px; }
-.form-panel h3 { margin: 0 0 8px; font-size: 15px; }
-.muted { color: var(--el-text-color-secondary); font-size: 13px; margin: 0 0 12px; line-height: 1.5; }
+.muted { color: var(--qz-text-muted); font-size: 13px; margin: 0 0 12px; line-height: 1.5; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .mb12 { margin-bottom: 12px; }
 .mt12 { margin-top: 12px; }
 .stat-num.text-sm { font-size: 18px; }
-.stat-bad { border-color: #fca5a5; }
 .feature-tags { display: flex; flex-wrap: wrap; gap: 8px; }
-.cols-4 {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-@media (max-width: 1100px) {
-  .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 </style>

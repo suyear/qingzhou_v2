@@ -149,7 +149,7 @@ onMounted(load)
 .role-layout {
   display: grid;
   grid-template-columns: 280px 1fr;
-  gap: 12px;
+  gap: 14px;
   align-items: start;
 }
 .role-list { padding: 8px; }
@@ -158,11 +158,13 @@ onMounted(load)
   border-radius: 10px;
   cursor: pointer;
   border: 1px solid transparent;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
-.role-item:hover { background: var(--qz-fill, #f8fafc); }
+.role-item:hover { background: var(--qz-fill); }
 .role-item.active {
   border-color: var(--el-color-primary-light-5);
-  background: var(--el-color-primary-light-9);
+  background: var(--qz-primary-soft);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.06);
 }
 .role-item strong { display: block; font-size: 14px; }
 .role-item .code, .perm-check .code {

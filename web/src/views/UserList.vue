@@ -14,9 +14,9 @@
             <el-tag v-for="r in row.roles || []" :key="r" size="small" class="role-tag">{{ roleLabel(r) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            <el-tag :type="row.status === 1 ? 'success' : 'info'" size="small">{{ row.status === 1 ? '启用' : '停用' }}</el-tag>
+            <StatusTag kind="enable" :value="row.status" />
           </template>
         </el-table-column>
         <el-table-column label="最近登录" min-width="160">
@@ -24,14 +24,21 @@
         </el-table-column>
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link @click="openEdit(row)">编辑</el-button>
-            <el-button v-if="row.status === 1" type="warning" link @click="onDisable(row)">停用</el-button>
+            <div class="qz-ops">
+              <el-button type="primary" link @click="openEdit(row)">编辑</el-button>
+              <el-button v-if="row.status === 1" type="warning" link @click="onDisable(row)">停用</el-button>
+            </div>
           </template>
         </el-table-column>
+        <template #empty>
+          <el-empty v-if="!loading && !loadError" description="还没有用户">
+            <el-button type="primary" @click="openCreate">新建用户</el-button>
+          </el-empty>
+        </template>
       </el-table>
     </div>
 
-    <el-dialog v-model="visible" :title="form.id ? '编辑用户' : '新建用户'" width="480px">
+    <el-dialog v-model="visible" :title="form.id ? '编辑用户' : '新建用户'" width="480px" destroy-on-close>
       <el-form label-position="top">
         <el-form-item label="用户名" required>
           <el-input v-model="form.username" :disabled="!!form.id" />
@@ -64,6 +71,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import PageState from '@/components/PageState.vue'
+import StatusTag from '@/components/StatusTag.vue'
 import { createUser, disableUser, listRoles, pageUsers, updateUser } from '@/api/auth'
 import { networkErrorMessage } from '@/api/http'
 import { formatTime } from '@/utils/format'
