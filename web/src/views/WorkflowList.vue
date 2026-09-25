@@ -1,6 +1,6 @@
 <template>
   <div class="workflow-page">
-    <PageHeader title="工作流编排" desc="按顺序加步骤组成调用链，试跑通过后发布，就能定时跑或给别人调。">
+    <PageHeader title="工作流编排" desc="按顺序加步骤组成调用链；列表「编码」即开放调用用的 workflowCode，发布后可供调度或开放平台调用。">
       <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 120px" @change="reload">
         <el-option label="草稿" value="DRAFT" />
         <el-option label="已发布" value="PUBLISHED" />

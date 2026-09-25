@@ -209,8 +209,9 @@ public class ApiComponentServiceImpl extends ServiceImpl<ApiComponentMapper, Api
         vo.setRequestMethod(spec.method());
         vo.setRequestUrl(result.displayUrl());
         vo.setDurationMs(duration);
-        vo.setResponseBody(jsons.toJson(result.logBody() == null || result.logBody().isEmpty()
-                ? result.output() : result.logBody()));
+        // 对外 / 试连通均返回业务 output（含 rows），logBody.preview 仅用于执行日志截断展示
+        vo.setResponseBody(jsons.toJson(result.output() == null || result.output().isEmpty()
+                ? result.logBody() : result.output()));
         vo.setHttpStatus(result.success() ? 200 : (result.timeout() ? 504 : 400));
         vo.setSuccess(result.success());
         if (result.timeout()) {

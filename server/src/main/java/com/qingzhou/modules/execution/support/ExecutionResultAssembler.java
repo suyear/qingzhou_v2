@@ -78,18 +78,42 @@ public class ExecutionResultAssembler {
                 .build();
     }
 
+    /**
+     * 开放网关优先用实例业务 output（DB 含 rows），避免节点日志里的 preview 截断视图。
+     */
     private Object buildPublicOutput(ExecutionVO vo) {
+        Map<String, Object> byNodeId = DbResultCleaner.stripMap(parseObjectMap(vo.getInstance().getOutputResult()));
+        if (!byNodeId.isEmpty()) {
+            if (byNodeId.size() == 1) {
+                return byNodeId.values().iterator().next();
+            }
+            Map<String, String> idToName = new LinkedHashMap<>();
+            for (ExecutionNodeLog log : vo.getLogs() == null ? List.<ExecutionNodeLog>of() : vo.getLogs()) {
+                if (StringUtils.hasText(log.getNodeId())) {
+                    idToName.put(log.getNodeId(),
+                            StringUtils.hasText(log.getNodeName()) ? log.getNodeName() : log.getNodeId());
+                }
+            }
+            Map<String, Object> byName = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : byNodeId.entrySet()) {
+                String name = idToName.getOrDefault(entry.getKey(), entry.getKey());
+                String unique = name;
+                int i = 2;
+                while (byName.containsKey(unique)) {
+                    unique = name + "_" + i++;
+                }
+                byName.put(unique, entry.getValue());
+            }
+            return byName;
+        }
+
         List<ExecutionNodeLog> logs = vo.getLogs() == null ? List.of() : vo.getLogs();
         List<ExecutionNodeLog> successLogs = logs.stream()
                 .filter(log -> "SUCCESS".equals(log.getStatus()))
                 .toList();
         List<ExecutionNodeLog> source = successLogs.isEmpty() ? logs : successLogs;
         if (source.isEmpty()) {
-            Map<String, Object> raw = DbResultCleaner.stripMap(parseObjectMap(vo.getInstance().getOutputResult()));
-            if (raw.size() == 1) {
-                return raw.values().iterator().next();
-            }
-            return raw.isEmpty() ? null : raw;
+            return null;
         }
         if (source.size() == 1) {
             return DbResultCleaner.stripRedundant(parseJson(source.get(0).getResponseBody()));

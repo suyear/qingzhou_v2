@@ -4,16 +4,21 @@
       <div class="docs-hero-title">如何调用开放接口服务与组合接口服务？</div>
       <p class="docs-hero-desc">
         接口组件 = 接口服务；工作流编排 = 组合接口服务。授权给开放应用后，用同一套签名调用。
-        不会写签名也没关系：在「应用管理」打开<strong>调用助手</strong>，填入参后点「生成 curl」即可复制到终端。
+        下方示例与「调用助手」走网关试调看到的<strong>请求入参 / 业务 output</strong>结构一致（助手页外层的 preview 包装仅用于控制台代理，不是对外契约）。
       </p>
     </div>
 
     <section class="doc-section">
       <h3>快速开始</h3>
       <ol class="steps">
-        <li>准备可开放资源：启用<strong>接口组件</strong>，或发布<strong>工作流</strong>，分别记下 <code>componentCode</code> / <code>workflowCode</code></li>
+        <li>
+          准备可开放资源：启用<strong>接口组件</strong>或发布<strong>工作流</strong>。
+          <code>componentCode</code> 在「接口组件」列表的<strong>编码</strong>列（点击可复制）；
+          <code>workflowCode</code> 在「工作流编排」列表的<strong>编码</strong>列。
+          开放平台授权/调用助手下拉里也会显示编码。
+        </li>
         <li>在「应用管理」<strong>新建应用</strong>，保存 App Key 和 Secret（Secret 只显示一次）</li>
-        <li><strong>授权资源</strong>（接口服务和/或组合接口服务）→ 打开「调用助手」填扁平 JSON，生成 curl 或走网关试调</li>
+        <li><strong>授权资源</strong> → 打开「调用助手」，按资源 schema 填入参，生成 curl 或走网关试调</li>
         <li>正式对接时按下方签名规则在服务端计算 HMAC（不要把 Secret 放到浏览器）</li>
       </ol>
     </section>
@@ -23,7 +28,9 @@
       <DetailCodeBlock title="接口服务（组件）" :value="componentPath" tone="ink" max-height="80px" />
       <DetailCodeBlock class="mt10" title="组合接口服务（工作流）" :value="workflowPath" tone="ink" max-height="80px" />
       <p class="tip">
-        控制台「调用助手」生成的 curl 已包含正确地址和签名头。生产环境请在
+        路径中的 <code>{componentCode}</code> / <code>{workflowCode}</code> 即列表「编码」列的值
+        （例如 <code>custom.db.id</code>、<code>wf_1790318130929</code>）。
+        调用助手生成的 curl 已填好真实编码。生产环境请在
         <strong>系统设置 → 开放平台对外地址</strong> 配置（对应 <code>qingzhou.openapi.public-base-url</code>）。
       </p>
     </section>
@@ -31,19 +38,29 @@
     <section class="doc-section">
       <h3>请求体</h3>
       <p class="tip">
-        Body 为资源<strong>入参扁平 JSON</strong>（不是再包一层 <code>input</code>），与组件 query/body schema 或工作流入参 schema 一致。
-        无 schema 时可先用下方 demo。
+        Body 为资源<strong>入参扁平 JSON</strong>（不要再包一层 <code>input</code>），字段以该资源 schema 为准
+        （调用助手「入参字段说明」同源）。下方 demo 对应「按 userId 查询」类资源。
       </p>
-      <DetailCodeBlock title="示例（与调用助手 / curl 同源）" :value="bodySample" tone="ink" max-height="80px" />
+      <DetailCodeBlock title="示例请求（与 curl -d / 助手试调入参同源）" :value="bodyPretty" tone="ink" max-height="100px" />
     </section>
 
     <section class="doc-section">
       <h3>成功响应</h3>
+      <el-radio-group v-model="samplePath" size="small" class="path-switch">
+        <el-radio-button value="workflow">组合接口服务</el-radio-button>
+        <el-radio-button value="component">接口服务</el-radio-button>
+      </el-radio-group>
       <p class="tip">
-        对接方只需关心 <strong>入参</strong> 与业务 <strong>output</strong>。响应不含编排步骤；
-        组件调用与工作流共用同一响应结构。
+        外层 <code>{ code, message, data }</code>；业务在 <code>data.output</code>；无编排 <code>steps</code>。
+        DB 查询结果为 <code>rows</code>（不是执行日志里的 <code>preview</code>）。
+        组件调用无 <code>executionId</code> / <code>executionNo</code>。
       </p>
-      <DetailCodeBlock title="示例" :value="successSampleText" tone="ink" max-height="280px" />
+      <DetailCodeBlock
+        :title="samplePath === 'component' ? '示例响应 · 接口服务' : '示例响应 · 组合接口服务'"
+        :value="successSampleText"
+        tone="ink"
+        max-height="360px"
+      />
     </section>
 
     <section class="doc-section">
@@ -76,6 +93,7 @@
         <el-radio-button value="workflow">组合接口服务</el-radio-button>
         <el-radio-button value="component">接口服务</el-radio-button>
       </el-radio-group>
+      <p class="tip">以下 body 均为 <code>{{ bodyCompact }}</code>，与「请求体」及调用助手试调入参一致。</p>
       <el-tabs v-model="sampleTab" class="sample-tabs">
         <el-tab-pane label="curl" name="curl">
           <DetailCodeBlock title="curl" :value="curlSample" copy-message="已复制" tone="ink" max-height="280px" />
@@ -102,13 +120,19 @@
 <script setup>
 import { computed, ref } from 'vue'
 import DetailCodeBlock from '@/components/detail/DetailCodeBlock.vue'
-import { OPENAPI_DEMO_INPUT, openapiSuccessSample } from '@/utils/openapiContract'
+import {
+  OPENAPI_DEMO_INPUT,
+  openapiBodyCompact,
+  openapiBodyPretty,
+  openapiSuccessSampleText,
+} from '@/utils/openapiContract'
 
 const sampleTab = ref('curl')
 const samplePath = ref('workflow')
 
-const bodyCompact = JSON.stringify(OPENAPI_DEMO_INPUT)
-const bodySample = bodyCompact
+const bodyCompact = openapiBodyCompact()
+const bodyPretty = openapiBodyPretty()
+const successSampleText = computed(() => openapiSuccessSampleText(samplePath.value))
 
 const componentPath = 'POST {baseUrl}/openapi/v1/components/{componentCode}/execute'
 const workflowPath = 'POST {baseUrl}/openapi/v1/workflows/{workflowCode}/execute'
@@ -127,14 +151,13 @@ const errors = [
   { code: 'Nonce 重复', fix: '每次请求生成新的 nonce' },
   { code: '应用未授权该资源', fix: '在应用管理中授权对应接口组件或已发布工作流' },
   { code: '工作流未发布 / 组件未启用', fix: '先发布工作流，或将组件状态设为启用' },
+  { code: '缺少入参 / SQL 参数', fix: '对照资源 schema 或调用助手「入参字段说明」补齐必填字段' },
   { code: 'IP 不在白名单', fix: '在应用设置中调整 IP 白名单或清空不限制' },
   { code: '超过 QPS 限制', fix: '调低调用频率或提高应用 QPS 上限' },
 ]
 
 const signSample = `stringToSign = MD5(body) + timestamp + nonce + secret
 signature    = Hex(HMAC-SHA256(key=secret, data=stringToSign)).toLowerCase()`
-
-const successSampleText = JSON.stringify(openapiSuccessSample(), null, 2)
 
 const executeUrl = computed(() =>
   samplePath.value === 'component'
@@ -225,13 +248,13 @@ await fetch('${executeUrl.value}', {
   color: var(--qz-text-muted);
 }
 .tip {
-  margin: 8px 0 0;
+  margin: 8px 0 10px;
   font-size: 12px;
   color: var(--qz-text-muted);
   line-height: 1.5;
 }
 .doc-table { margin-top: 8px; }
-.path-switch { margin-bottom: 10px; }
+.path-switch { margin-bottom: 8px; }
 .sample-tabs :deep(.el-tabs__header) { margin-bottom: 10px; }
 .mt10 { margin-top: 10px; }
 code {

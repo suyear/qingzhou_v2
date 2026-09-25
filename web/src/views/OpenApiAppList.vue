@@ -438,17 +438,25 @@
                 <DetailCodeBlock
                   v-if="invokeRequestBody"
                   class="mt12"
-                  title="请求入参"
+                  title="请求入参（= 对外 body）"
                   :value="invokeRequestBody"
                   copy-message="已复制入参"
                   max-height="160px"
                 />
                 <DetailCodeBlock
                   class="mt12"
-                  title="业务输出 output"
+                  title="业务输出 data.output（= 对外响应）"
                   :value="invokeBusinessOutput"
                   copy-message="已复制输出"
                   max-height="280px"
+                />
+                <DetailCodeBlock
+                  v-if="invokeGatewayEnvelope"
+                  class="mt12"
+                  title="完整网关响应（与接入文档一致）"
+                  :value="invokeGatewayEnvelope"
+                  copy-message="已复制完整响应"
+                  max-height="240px"
                 />
                 <DetailCodeBlock
                   v-if="invokeMetaLine"
@@ -689,6 +697,12 @@ const invokeBusinessOutput = computed(() => {
     return data.output
   }
   return data
+})
+
+/** 网关真实返回体（去掉控制台 invoke 的 preview/httpStatus 包装） */
+const invokeGatewayEnvelope = computed(() => {
+  const resp = invokeResult.value?.response
+  return resp && typeof resp === 'object' ? resp : null
 })
 
 const invokeRequestBody = computed(() => {

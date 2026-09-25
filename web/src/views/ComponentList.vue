@@ -1,6 +1,6 @@
 <template>
   <div>
-    <PageHeader title="接口组件" desc="把外部 HTTP 接口或数据库脚本封装成可复用积木，拖进工作流就能用。">
+    <PageHeader title="接口组件" desc="把外部 HTTP 接口或数据库脚本封装成可复用积木；列表「编码」即开放调用用的 componentCode。">
       <el-radio-group v-model="viewMode" size="small" class="view-toggle">
         <el-radio-button value="table">列表</el-radio-button>
         <el-radio-button value="card">卡片</el-radio-button>
@@ -87,7 +87,7 @@
         <el-input
           v-model="keyword"
           class="search-input"
-          placeholder="搜索名称或地址"
+          placeholder="搜索名称 / 编码 / 地址"
           clearable
           @keyup.enter="reload"
           @clear="reload"
@@ -112,6 +112,7 @@
           <el-tag v-if="row.isPreset" size="small" type="warning">预置</el-tag>
         </div>
         <div class="comp-card-title">{{ row.componentName }}</div>
+        <div class="comp-card-code mono" @click.stop="onCopy(row.componentCode, '已复制编码')">{{ row.componentCode }}</div>
         <div class="comp-card-path mono">{{ displayPath(row) }}</div>
         <div class="comp-card-foot">
           <span v-if="paramStats(row).total">入参 {{ paramStats(row).required }}/{{ paramStats(row).total }}</span>
@@ -142,6 +143,13 @@
               <el-tag v-else-if="authSummary(row)" size="small" type="info" class="token-tag">{{ authSummary(row) }}</el-tag>
             </div>
             <div v-if="row.description" class="sub">{{ row.description }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="编码" min-width="180">
+          <template #default="{ row }">
+            <el-button type="primary" link class="mono" @click.stop="onCopy(row.componentCode, '已复制编码')">
+              {{ row.componentCode }}
+            </el-button>
           </template>
         </el-table-column>
         <el-table-column label="分类" width="110">
@@ -1264,6 +1272,13 @@ onMounted(() => {
   font-weight: 650;
   color: #0f172a;
   line-height: 1.35;
+}
+.comp-card-code {
+  font-size: 11px;
+  color: var(--el-color-primary);
+  word-break: break-all;
+  cursor: pointer;
+  line-height: 1.3;
 }
 .comp-card-path {
   color: #64748b;
