@@ -49,7 +49,7 @@ public class SecurityConfig {
                         .hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/auth/logout", "/api/auth/change-password").authenticated()
-                        .requestMatchers("/api/users/**", "/api/license/**", "/api/system/**", "/api/audit/**")
+                        .requestMatchers("/api/users/**", "/api/roles/**", "/api/license/**", "/api/system/**", "/api/audit/**")
                         .hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/**").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/**").hasAnyRole("ADMIN", "DEVELOPER")

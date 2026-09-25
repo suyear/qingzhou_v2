@@ -3,7 +3,8 @@ package com.qingzhou.modules.schedule.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.qingzhou.common.api.PageQuery;
 import com.qingzhou.common.api.R;
-import com.qingzhou.modules.execution.dto.ExecutionVO;
+import com.qingzhou.modules.execution.dto.RunResultVO;
+import com.qingzhou.modules.execution.support.ExecutionResultAssembler;
 import com.qingzhou.modules.schedule.dto.ScheduleJobSaveRequest;
 import com.qingzhou.modules.schedule.dto.ScheduleModeVO;
 import com.qingzhou.modules.schedule.dto.SchedulePreviewRequest;
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class ScheduleJobController {
 
     private final ScheduleJobService scheduleJobService;
+    private final ExecutionResultAssembler executionResultAssembler;
 
     @GetMapping("/mode")
     public R<ScheduleModeVO> mode() {
@@ -64,8 +66,8 @@ public class ScheduleJobController {
     }
 
     @PostMapping("/jobs/{id}/trigger")
-    public R<ExecutionVO> trigger(@PathVariable Long id) {
-        return R.ok(scheduleJobService.triggerNow(id));
+    public R<RunResultVO> trigger(@PathVariable Long id) {
+        return R.ok(executionResultAssembler.from(scheduleJobService.triggerNow(id)));
     }
 
     @DeleteMapping("/jobs/{id}")

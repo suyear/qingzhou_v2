@@ -17,32 +17,46 @@ function readUser() {
 export function useAuthStore() {
   const isLoggedIn = computed(() => !!token.value)
   const roles = computed(() => user.value?.roles || [])
-  const isAdmin = computed(() => roles.value.includes('ADMIN'))
-  const canWrite = computed(() => roles.value.includes('ADMIN') || roles.value.includes('DEVELOPER'))
+  const permissions = computed(() => user.value?.permissions || [])
+  const isAdmin = computed(() => roles.value.includes('ADMIN') || permissions.value.includes('system:admin'))
+  const canWrite = computed(() =>
+    roles.value.includes('ADMIN')
+    || roles.value.includes('DEVELOPER')
+    || permissions.value.some((p) => p.endsWith(':write')))
   const isViewer = computed(() => roles.value.includes('VIEWER') && !canWrite.value)
 
   function setSession(session) {
-    token.value = session?.token || ''
-    user.value = session
-      ? {
-          userId: session.userId,
-          username: session.username,
-          displayName: session.displayName,
-          roles: session.roles || [],
-          mustChangePassword: !!session.mustChangePassword,
-        }
-      : null
-    if (token.value) {
+    token.value = session?.token || token.value || ''
+    if (session?.token) {
+      token.value = session.token
+    }
+    if (session && (session.userId || session.username)) {
+      user.value = {
+        userId: session.userId,
+        username: session.username,
+        displayName: session.displayName,
+        roles: session.roles || [],
+        permissions: session.permissions || [],
+        mustChangePassword: !!session.mustChangePassword,
+      }
+    } else if (!session) {
+      user.value = null
+      token.value = ''
+    }
+    if (token.value && user.value) {
       localStorage.setItem(TOKEN_KEY, token.value)
       localStorage.setItem(USER_KEY, JSON.stringify(user.value))
-    } else {
+    } else if (!token.value) {
       localStorage.removeItem(TOKEN_KEY)
       localStorage.removeItem(USER_KEY)
     }
   }
 
   function clearSession() {
-    setSession(null)
+    token.value = ''
+    user.value = null
+    localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(USER_KEY)
   }
 
   function getToken() {
@@ -53,11 +67,21 @@ export function useAuthStore() {
     return roles.value.includes(role)
   }
 
+  function hasPermission(code) {
+    if (isAdmin.value) return true
+    return permissions.value.includes(code)
+  }
+
+  function hasAnyPermission(codes) {
+    return codes.some((c) => hasPermission(c))
+  }
+
   return {
     token,
     user,
     isLoggedIn,
     roles,
+    permissions,
     isAdmin,
     canWrite,
     isViewer,
@@ -65,5 +89,7 @@ export function useAuthStore() {
     clearSession,
     getToken,
     hasRole,
+    hasPermission,
+    hasAnyPermission,
   }
 }

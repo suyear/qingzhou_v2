@@ -542,7 +542,16 @@ const filteredGrantWorkflows = computed(() => {
   )
 })
 
-const invokeOk = computed(() => invokeResult.value?.response?.code === 0)
+const invokeOk = computed(() => {
+  const body = invokeResult.value?.response
+  if (!body || typeof body !== 'object') return false
+  if (body.code !== 0 && body.code !== undefined) return false
+  const data = body.data
+  if (data && typeof data === 'object' && data.status) {
+    return data.status === 'SUCCESS'
+  }
+  return body.code === 0
+})
 
 watch(secretVisible, (open) => {
   if (!open) secretConfirmed.value = false
@@ -912,7 +921,9 @@ async function runInvoke() {
     if (invokeOk.value) {
       ElMessage.success('试调成功')
     } else {
-      ElMessage.warning(res.data?.response?.message || '网关返回失败')
+      const body = res.data?.response
+      const msg = body?.data?.errorMsg || body?.message || '网关返回失败'
+      ElMessage.warning(msg)
     }
   } finally {
     invoking.value = false

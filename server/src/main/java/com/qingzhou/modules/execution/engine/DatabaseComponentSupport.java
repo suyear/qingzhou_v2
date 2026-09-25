@@ -70,7 +70,6 @@ public final class DatabaseComponentSupport {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("rowCount", Map.of("type", "integer", "description", "查询返回行数"));
         properties.put("affectedRows", Map.of("type", "integer", "description", "更新影响行数"));
-        properties.put("columns", Map.of("type", "array", "description", "查询列名"));
         properties.put("rows", Map.of("type", "array", "description", "查询行集"));
         properties.put("truncated", Map.of("type", "boolean", "description", "行集是否被截断"));
         Map<String, Object> schema = new LinkedHashMap<>();

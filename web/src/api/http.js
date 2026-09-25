@@ -30,6 +30,9 @@ export function networkErrorMessage(err) {
   if (status === 404) return serverMsg || '接口不存在（404）'
   if (status === 401) return serverMsg || '请先登录'
   if (status === 403) return serverMsg || '没有权限执行该操作'
+  if (status === 502 || status === 503 || status === 504) {
+    return '后端服务未启动或已断开（默认端口 18080）。请先启动 server，再刷新页面。'
+  }
   if (status >= 500) return serverMsg || '服务暂时不可用，请稍后重试'
   return serverMsg || err.message || '网络异常'
 }

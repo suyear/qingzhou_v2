@@ -32,6 +32,18 @@ export function listRoles() {
   return http.get('/api/users/roles')
 }
 
+export function listRolesDetail() {
+  return http.get('/api/roles')
+}
+
+export function listPermissions() {
+  return http.get('/api/roles/permissions')
+}
+
+export function updateRolePermissions(id, data) {
+  return http.put(`/api/roles/${id}/permissions`, data)
+}
+
 export function createUser(data) {
   return http.post('/api/users', data)
 }

@@ -14,11 +14,11 @@
         <div class="stat-num">{{ health.redis?.ok ? '正常' : '异常' }}</div>
         <div class="stat-hint">{{ health.redis?.message || '—' }}</div>
       </div>
-      <div class="stat-card">
+      <button type="button" class="stat-card clickable" @click="$router.push('/license')">
         <div class="stat-label">License</div>
         <div class="stat-num">{{ license.status || '—' }}</div>
-        <div class="stat-hint">{{ license.message || '—' }}</div>
-      </div>
+        <div class="stat-hint">{{ license.message || '点击进入 License 管理' }}</div>
+      </button>
     </div>
 
     <div class="qz-panel form-panel">
@@ -38,16 +38,6 @@
         <el-button type="primary" :loading="saving" @click="onSave">保存</el-button>
       </el-form>
     </div>
-
-    <div class="qz-panel form-panel">
-      <h3>License</h3>
-      <p class="muted">席位 {{ license.usedSeats || 0 }} / {{ license.seats || '不限' }} · {{ license.message }}</p>
-      <el-input v-model="licenseText" type="textarea" :rows="4" placeholder="粘贴 payload.signature 格式的 License" />
-      <div class="license-actions">
-        <el-button type="primary" :loading="importing" @click="onImport">导入 License</el-button>
-        <el-button :loading="generating" @click="onGenerateDemo">生成一年期演示 License</el-button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -57,9 +47,7 @@ import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import PageState from '@/components/PageState.vue'
 import {
-  generateDemoLicense,
   getSystemSettings,
-  importLicense,
   licenseStatus,
   saveSystemSettings,
   systemHealthDetail,
@@ -68,12 +56,9 @@ import { networkErrorMessage } from '@/api/http'
 
 const loadError = ref('')
 const saving = ref(false)
-const importing = ref(false)
-const generating = ref(false)
 const healthLoading = ref(false)
 const health = reactive({ mysql: null, redis: null })
 const license = reactive({})
-const licenseText = ref('')
 const form = reactive({
   siteName: '轻舟',
   openapiPublicBaseUrl: '',
@@ -111,35 +96,21 @@ async function onSave() {
   }
 }
 
-async function onImport() {
-  importing.value = true
-  try {
-    const res = await importLicense({ licenseText: licenseText.value })
-    Object.assign(license, res.data || {})
-    ElMessage.success('License 已导入')
-    licenseText.value = ''
-  } finally {
-    importing.value = false
-  }
-}
-
-async function onGenerateDemo() {
-  generating.value = true
-  try {
-    const res = await generateDemoLicense({ customer: form.siteName || 'Demo', seats: 20 })
-    licenseText.value = res.data?.licenseText || ''
-    ElMessage.success('已生成，确认后点导入')
-  } finally {
-    generating.value = false
-  }
-}
-
 onMounted(load)
 </script>
 
 <style scoped>
 .form-panel { padding: 16px 18px 20px; margin-bottom: 12px; }
-.form-panel h3 { margin: 0 0 8px; font-size: 15px; }
-.muted { color: var(--el-text-color-secondary); font-size: 13px; margin: 0 0 12px; }
-.license-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.stat-card.clickable {
+  cursor: pointer;
+  text-align: left;
+  border: 1px solid transparent;
+  background: var(--qz-panel, #fff);
+  font: inherit;
+  color: inherit;
+}
+.stat-card.clickable:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
 </style>

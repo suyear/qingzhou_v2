@@ -1,33 +1,11 @@
 <template>
   <div>
-    <PageHeader title="接口组件" desc="接入外部接口或数据库脚本，保存后就能在工作流里使用。">
-      <el-select v-model="category" placeholder="全部分类" clearable style="width: 140px" @change="reload">
-        <el-option v-for="item in categoryOptions" :key="item.value" :label="item.label" :value="item.value" />
-      </el-select>
-      <el-select v-model="presetFilter" placeholder="全部来源" clearable style="width: 120px" @change="reload">
-        <el-option label="预置" value="1" />
-        <el-option label="自定义" value="0" />
-      </el-select>
-      <el-select
-        v-if="category !== 'DATABASE'"
-        v-model="httpMethod"
-        placeholder="请求方式"
-        clearable
-        style="width: 120px"
-        @change="reload"
-      >
-        <el-option v-for="m in methods" :key="m" :label="methodFilterLabel(m)" :value="m" />
-      </el-select>
-      <el-input
-        v-model="keyword"
-        class="search-input"
-        placeholder="搜索名称或地址"
-        clearable
-        @keyup.enter="reload"
-        @clear="reload"
-      />
-      <el-button @click="reload">查询</el-button>
-      <el-dropdown split-button type="primary" @click="openCreate('easy')" @command="openCreate">
+    <PageHeader title="接口组件" desc="把外部 HTTP 接口或数据库脚本封装成可复用积木，拖进工作流就能用。">
+      <el-radio-group v-model="viewMode" size="small" class="view-toggle">
+        <el-radio-button value="table">列表</el-radio-button>
+        <el-radio-button value="card">卡片</el-radio-button>
+      </el-radio-group>
+      <el-dropdown v-if="canWrite" split-button type="primary" @click="openCreate('easy')" @command="openCreate">
         接入接口
         <template #dropdown>
           <el-dropdown-menu>
@@ -42,20 +20,22 @@
     </PageHeader>
 
     <PageState :error="loadError" @retry="load" />
+
     <div v-if="!showGuide && componentStats" class="stat-grid cols-3">
-      <div class="stat-card">
+      <button type="button" class="stat-card clickable" :class="{ active: !category && !presetFilter }" @click="setQuickFilter({})">
         <div class="stat-label">全部组件</div>
         <div class="stat-num">{{ componentStats.total ?? 0 }}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">HTTP</div>
+      </button>
+      <button type="button" class="stat-card clickable" :class="{ active: category === 'HTTP' }" @click="setQuickFilter({ category: 'HTTP' })">
+        <div class="stat-label">HTTP 接口</div>
         <div class="stat-num">{{ componentStats.httpCount ?? 0 }}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">数据库</div>
+      </button>
+      <button type="button" class="stat-card clickable" :class="{ active: category === 'DATABASE' }" @click="setQuickFilter({ category: 'DATABASE' })">
+        <div class="stat-label">数据库脚本</div>
         <div class="stat-num">{{ componentStats.databaseCount ?? 0 }}</div>
-      </div>
+      </button>
     </div>
+
     <el-alert
       v-if="showGuide"
       class="guide-alert"
@@ -69,12 +49,91 @@
         <span>① 新建组件，<strong>填地址</strong>、<strong>粘贴 curl</strong> 或写<strong>数据库脚本</strong></span>
         <span>② 确认信息后点<strong>试连通</strong></span>
         <span>③ 在工作流设计器左侧组件库拖入画布</span>
-        <el-button class="guide-action" type="primary" size="small" @click="openCreate('easy')">立即接入</el-button>
+        <el-button v-if="canWrite" class="guide-action" type="primary" size="small" @click="openCreate('easy')">立即接入</el-button>
       </div>
     </el-alert>
 
-    <div class="qz-panel">
-      <el-table class="qz-table" :data="records" v-loading="loading" stripe>
+    <div class="filter-bar qz-panel">
+      <div class="chip-row">
+        <button
+          type="button"
+          class="chip"
+          :class="{ active: !category }"
+          @click="setQuickFilter({ category: '' })"
+        >全部类型</button>
+        <button
+          v-for="item in categoryOptions"
+          :key="item.value"
+          type="button"
+          class="chip"
+          :class="{ active: category === item.value }"
+          @click="setQuickFilter({ category: item.value })"
+        >{{ item.label }}</button>
+        <span class="chip-sep" />
+        <button type="button" class="chip" :class="{ active: presetFilter === '0' }" @click="setQuickFilter({ preset: presetFilter === '0' ? '' : '0' })">我创建的</button>
+        <button type="button" class="chip" :class="{ active: presetFilter === '1' }" @click="setQuickFilter({ preset: presetFilter === '1' ? '' : '1' })">系统预置</button>
+      </div>
+      <div class="filter-actions">
+        <el-select
+          v-if="category !== 'DATABASE'"
+          v-model="httpMethod"
+          placeholder="请求方式"
+          clearable
+          style="width: 130px"
+          @change="reload"
+        >
+          <el-option v-for="m in methods" :key="m" :label="methodFilterLabel(m)" :value="m" />
+        </el-select>
+        <el-input
+          v-model="keyword"
+          class="search-input"
+          placeholder="搜索名称或地址"
+          clearable
+          @keyup.enter="reload"
+          @clear="reload"
+          @input="onKeywordInput"
+        />
+        <el-button @click="reload">查询</el-button>
+        <el-button v-if="hasListFilters" link type="primary" @click="clearFilters">清除筛选</el-button>
+      </div>
+    </div>
+
+    <div v-if="viewMode === 'card'" class="card-grid" v-loading="loading">
+      <button
+        v-for="row in records"
+        :key="row.id"
+        type="button"
+        class="comp-card"
+        @click="openDetail(row)"
+      >
+        <div class="comp-card-top">
+          <el-tag size="small" :type="httpMethodTagType(row.httpMethod)">{{ methodLabel(row) }}</el-tag>
+          <el-tag size="small" type="info">{{ categoryLabel(row.category) }}</el-tag>
+          <el-tag v-if="row.isPreset" size="small" type="warning">预置</el-tag>
+        </div>
+        <div class="comp-card-title">{{ row.componentName }}</div>
+        <div class="comp-card-path mono">{{ displayPath(row) }}</div>
+        <div class="comp-card-foot">
+          <span v-if="paramStats(row).total">入参 {{ paramStats(row).required }}/{{ paramStats(row).total }}</span>
+          <span v-else class="muted">无入参</span>
+          <span v-if="authSummary(row) || needsAccessToken(row)" class="auth-hint">
+            {{ needsAccessToken(row) ? 'Token' : authSummary(row) }}
+          </span>
+        </div>
+        <div class="comp-card-ops" @click.stop>
+          <el-button type="primary" link size="small" @click="openTest(row)">
+            {{ isDatabaseComponent(row) ? '试运行' : '试连通' }}
+          </el-button>
+          <el-button v-if="canWrite" type="primary" link size="small" @click="openEdit(row)">编辑</el-button>
+        </div>
+      </button>
+      <el-empty v-if="!loading && !loadError && !records.length" :description="emptyText">
+        <el-button v-if="canWrite" type="primary" @click="openCreate('easy')">新建组件</el-button>
+      </el-empty>
+    </div>
+
+    <div v-else class="qz-panel">
+      <el-table class="qz-table" :data="records" v-loading="loading" stripe @row-click="openDetail">
         <el-table-column label="名称" min-width="150">
           <template #default="{ row }">
             <div class="name-cell">
@@ -115,10 +174,10 @@
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <div class="qz-ops">
+            <div class="qz-ops" @click.stop>
               <el-button type="primary" link @click="openDetail(row)">详情</el-button>
               <el-button type="primary" link @click="openTest(row)">{{ isDatabaseComponent(row) ? '试运行' : '试连通' }}</el-button>
-              <el-dropdown trigger="click" @command="(cmd) => onRowCommand(cmd, row)">
+              <el-dropdown v-if="canWrite" trigger="click" @command="(cmd) => onRowCommand(cmd, row)">
                 <el-button type="primary" link>更多</el-button>
                 <template #dropdown>
                   <el-dropdown-menu>
@@ -133,7 +192,7 @@
         </el-table-column>
         <template #empty>
           <el-empty v-if="!loading && !loadError" :description="emptyText">
-            <el-button type="primary" @click="openCreate('easy')">新建组件</el-button>
+            <el-button v-if="canWrite" type="primary" @click="openCreate('easy')">新建组件</el-button>
           </el-empty>
         </template>
       </el-table>
@@ -147,6 +206,17 @@
           @current-change="load"
         />
       </div>
+    </div>
+
+    <div v-if="viewMode === 'card' && total > 0" class="pager card-pager">
+      <el-pagination
+        background
+        layout="total, prev, pager, next"
+        :total="total"
+        v-model:current-page="current"
+        v-model:page-size="size"
+        @current-change="load"
+      />
     </div>
 
     <el-drawer
@@ -191,7 +261,7 @@
         <LineagePanel v-if="detailRow.id" type="component" :id="detailRow.id" />
         <DetailActions>
           <el-button type="primary" @click="openTest(detailRow)">{{ isDatabaseComponent(detailRow) ? '试运行 SQL' : '试连通' }}</el-button>
-          <el-button @click="openEdit(detailRow)">编辑</el-button>
+          <el-button v-if="canWrite" @click="openEdit(detailRow)">编辑</el-button>
         </DetailActions>
       </div>
     </el-drawer>
@@ -420,6 +490,7 @@ import { createComponent, deleteComponent, pageComponents, testComponent, update
 import { pageCredentials } from '@/api/credential'
 import { getModuleStats } from '@/api/dashboard'
 import { networkErrorMessage } from '@/api/http'
+import { useAuthStore } from '@/stores/auth'
 import {
   CATEGORY_LABEL,
   categoryLabel,
@@ -445,6 +516,12 @@ const methodOptions = [
 ]
 const categoryOptions = Object.entries(CATEGORY_LABEL).map(([value, label]) => ({ value, label }))
 
+const auth = useAuthStore()
+const canWrite = computed(() => auth.hasPermission('component:write') || auth.canWrite.value)
+const VIEW_KEY = 'qz-component-view-mode'
+const viewMode = ref(localStorage.getItem(VIEW_KEY) === 'card' ? 'card' : 'table')
+watch(viewMode, (v) => localStorage.setItem(VIEW_KEY, v))
+
 const route = useRoute()
 const router = useRouter()
 const keyword = ref(route.query.keyword || '')
@@ -458,14 +535,45 @@ const size = ref(10)
 const loading = ref(false)
 const loadError = ref('')
 const syncingQuery = ref(false)
+let keywordTimer = null
 
 const createVisible = ref(false)
 const createMode = ref('easy')
 const hasListFilters = computed(() => Boolean(keyword.value || category.value || presetFilter.value || httpMethod.value))
 
 function openCreate(mode = 'easy') {
+  if (!canWrite.value) return
   createMode.value = mode
   createVisible.value = true
+}
+
+function setQuickFilter(partial) {
+  if (Object.prototype.hasOwnProperty.call(partial, 'category')) {
+    category.value = partial.category || ''
+    if (category.value === 'DATABASE') httpMethod.value = ''
+  }
+  if (Object.prototype.hasOwnProperty.call(partial, 'preset')) {
+    presetFilter.value = partial.preset || ''
+  }
+  if (!Object.keys(partial).length) {
+    category.value = ''
+    presetFilter.value = ''
+    httpMethod.value = ''
+  }
+  reload()
+}
+
+function clearFilters() {
+  keyword.value = ''
+  category.value = ''
+  presetFilter.value = ''
+  httpMethod.value = ''
+  reload()
+}
+
+function onKeywordInput() {
+  clearTimeout(keywordTimer)
+  keywordTimer = setTimeout(() => reload(), 400)
 }
 const dialogVisible = ref(false)
 const editTab = ref('basic')
@@ -1072,9 +1180,118 @@ onMounted(() => {
 .detail-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
 .detail-url { margin-top: 14px; }
 .detail-meta-list { margin-top: 14px; }
+.filter-bar {
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.chip {
+  border: 1px solid var(--qz-border, #e2e8f0);
+  background: #fff;
+  color: #475569;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.chip:hover { border-color: #93c5fd; color: #1d4ed8; }
+.chip.active {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.chip-sep {
+  width: 1px;
+  height: 16px;
+  background: #e2e8f0;
+  margin: 0 4px;
+}
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.search-input { width: 240px; }
+.stat-card.clickable {
+  cursor: pointer;
+  text-align: left;
+  border: 1px solid transparent;
+  background: var(--qz-panel, #fff);
+  font: inherit;
+}
+.stat-card.clickable:hover,
+.stat-card.clickable.active {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  min-height: 120px;
+}
+.comp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  text-align: left;
+  border: 1px solid var(--qz-border, #e2e8f0);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.comp-card:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+}
+.comp-card-top { display: flex; flex-wrap: wrap; gap: 4px; }
+.comp-card-title {
+  font-size: 15px;
+  font-weight: 650;
+  color: #0f172a;
+  line-height: 1.35;
+}
+.comp-card-path {
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.comp-card-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+.auth-hint { color: #b45309; }
+.comp-card-ops {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px dashed #e2e8f0;
+}
+.card-pager { margin-top: 12px; }
+.view-toggle { margin-right: 4px; }
 @media (max-width: 900px) {
   .param-row {
     grid-template-columns: 1fr 1fr;
   }
+  .search-input { width: 100%; }
 }
 </style>

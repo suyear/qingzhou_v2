@@ -13,7 +13,7 @@
             <el-dropdown-menu>
               <el-dropdown-item disabled>{{ roleText }}</el-dropdown-item>
               <el-dropdown-item command="password">修改密码</el-dropdown-item>
-              <el-dropdown-item v-if="auth.isAdmin.value" command="settings">系统设置</el-dropdown-item>
+              <el-dropdown-item v-if="auth.hasPermission('menu:settings')" command="settings">系统设置</el-dropdown-item>
               <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -30,50 +30,11 @@
           text-color="#94a3b8"
           active-text-color="#ffffff"
         >
-          <el-menu-item index="/">
-            <el-icon><HomeFilled /></el-icon>
-            <span>工作台</span>
-          </el-menu-item>
-          <div class="nav-group">编排</div>
-          <el-menu-item index="/components">
-            <el-icon><Grid /></el-icon>
-            <span>接口组件</span>
-          </el-menu-item>
-          <el-menu-item index="/workflows">
-            <el-icon><Share /></el-icon>
-            <span>工作流编排</span>
-          </el-menu-item>
-          <el-menu-item v-if="auth.canWrite.value" index="/credentials">
-            <el-icon><Key /></el-icon>
-            <span>凭证管理</span>
-          </el-menu-item>
-          <div class="nav-group">运行</div>
-          <el-menu-item index="/schedules">
-            <el-icon><Timer /></el-icon>
-            <span>定时调度</span>
-          </el-menu-item>
-          <el-menu-item index="/executions">
-            <el-icon><List /></el-icon>
-            <span>运行结果</span>
-          </el-menu-item>
-          <div class="nav-group">开放</div>
-          <el-menu-item index="/openapi">
-            <el-icon><Connection /></el-icon>
-            <span>开放平台</span>
-          </el-menu-item>
-          <template v-if="auth.isAdmin.value">
-            <div class="nav-group">系统</div>
-            <el-menu-item index="/users">
-              <el-icon><User /></el-icon>
-              <span>用户管理</span>
-            </el-menu-item>
-            <el-menu-item index="/audit">
-              <el-icon><Document /></el-icon>
-              <span>审计日志</span>
-            </el-menu-item>
-            <el-menu-item index="/settings">
-              <el-icon><Setting /></el-icon>
-              <span>系统设置</span>
+          <template v-for="group in visibleGroups" :key="group.key">
+            <div v-if="group.label" class="nav-group">{{ group.label }}</div>
+            <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path">
+              <el-icon><component :is="iconMap[item.icon]" /></el-icon>
+              <span>{{ item.title }}</span>
             </el-menu-item>
           </template>
         </el-menu>
@@ -110,7 +71,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -121,26 +82,31 @@ import {
   HomeFilled,
   Key,
   List,
+  Lock,
   Setting,
   Share,
+  Ticket,
   Timer,
   User,
 } from '@element-plus/icons-vue'
 import { backendUnreachable } from '@/api/http'
-import { changePassword, logout } from '@/api/auth'
+import { changePassword, fetchMe, logout } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
+import { MENU_GROUPS, PAGE_TITLES } from '@/utils/menus'
 
-const TITLES = {
-  '/': '工作台',
-  '/components': '接口组件',
-  '/workflows': '工作流编排',
-  '/schedules': '定时调度',
-  '/credentials': '凭证管理',
-  '/executions': '运行结果',
-  '/openapi': '开放平台',
-  '/users': '用户管理',
-  '/audit': '审计日志',
-  '/settings': '系统设置',
+const iconMap = {
+  HomeFilled,
+  Grid,
+  Share,
+  Key,
+  Timer,
+  List,
+  Connection,
+  User,
+  Lock,
+  Ticket,
+  Document,
+  Setting,
 }
 
 const route = useRoute()
@@ -150,11 +116,20 @@ const pwdVisible = ref(false)
 const pwdSaving = ref(false)
 const pwdForm = reactive({ oldPassword: '', newPassword: '' })
 
+const visibleGroups = computed(() =>
+  MENU_GROUPS
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((item) => auth.hasPermission(item.perm)),
+    }))
+    .filter((g) => g.items.length > 0),
+)
+
 const currentTitle = computed(() => {
   if (route.path.startsWith('/designer')) {
     return '工作流设计器'
   }
-  return TITLES[route.path] || '轻舟'
+  return PAGE_TITLES[route.path] || '轻舟'
 })
 
 const activeMenu = computed(() => {
@@ -201,6 +176,17 @@ async function onChangePassword() {
     pwdSaving.value = false
   }
 }
+
+onMounted(async () => {
+  try {
+    const res = await fetchMe()
+    if (res.data) {
+      auth.setSession({ ...res.data, token: auth.getToken() })
+    }
+  } catch {
+    /* keep cached session */
+  }
+})
 </script>
 
 <style scoped>

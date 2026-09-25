@@ -429,7 +429,7 @@ async function onTrigger(row) {
   row._triggering = true
   try {
     const res = await triggerScheduleJob(row.id)
-    const status = res.data?.instance?.status
+    const status = res.data?.status
     ElMessage.success(status === 'SUCCESS' ? '触发成功' : `触发完成：${status || '未知'}`)
     await Promise.all([load(), loadStats()])
   } finally {

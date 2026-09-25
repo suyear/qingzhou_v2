@@ -1,6 +1,7 @@
 <template>
   <div>
-    <PageHeader title="用户管理" desc="管理控制台账号与角色（管理员 / 开发者 / 只读运维）。">
+    <PageHeader title="用户管理" desc="管理控制台账号与角色。细粒度菜单/操作权限请到「角色权限」配置。">
+      <el-button @click="$router.push('/roles')">角色权限</el-button>
       <el-button type="primary" @click="openCreate">新建用户</el-button>
     </PageHeader>
     <PageState :error="loadError" @retry="load" />

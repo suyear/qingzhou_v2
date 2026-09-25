@@ -38,6 +38,7 @@ public class JwtTokenService {
         payload.put("username", principal.getUsername());
         payload.put("displayName", principal.getDisplayName());
         payload.put("roles", principal.getRoles());
+        payload.put("permissions", principal.getPermissions());
         payload.put("mcp", principal.isMustChangePassword() ? 1 : 0);
         payload.put("iat", now);
         payload.put("exp", now + ttlSeconds());
@@ -71,7 +72,9 @@ public class JwtTokenService {
             @SuppressWarnings("unchecked")
             List<String> roles = (List<String>) payload.getOrDefault("roles", List.of());
             boolean mcp = Integer.parseInt(String.valueOf(payload.getOrDefault("mcp", 0))) == 1;
-            return new AuthUserPrincipal(id, username, displayName, "", true, mcp, roles);
+            @SuppressWarnings("unchecked")
+            List<String> permissions = (List<String>) payload.getOrDefault("permissions", List.of());
+            return new AuthUserPrincipal(id, username, displayName, "", true, mcp, roles, permissions);
         } catch (Exception ex) {
             return null;
         }

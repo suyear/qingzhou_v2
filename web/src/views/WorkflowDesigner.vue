@@ -203,6 +203,7 @@ import { getTeleport } from '@antv/x6-vue-shape'
 import { pageComponents } from '@/api/component'
 import { pageCredentials } from '@/api/credential'
 import { createWorkflow, getWorkflow, publishWorkflow, tryRunWorkflow, updateWorkflow } from '@/api/workflow'
+import { getExecution } from '@/api/execution'
 import { fieldsToSchema, schemaFields, schemaToFields, toNodeData, urlPath } from '@/utils/schema'
 import {
   applyBindingsToNodeData,
@@ -980,13 +981,23 @@ async function confirmTryRun() {
       }
     }
     const res = await tryRunWorkflow(route.params.id, { input })
-    runResult.value = res.data
     tryRunDialogVisible.value = false
-    logVisible.value = true
-    if (res.data?.instance?.status === 'SUCCESS') {
-      ElMessage.success('试运行成功')
+    const slim = res.data || {}
+    if (slim.executionId) {
+      try {
+        const detail = await getExecution(slim.executionId)
+        runResult.value = detail.data
+      } catch {
+        runResult.value = null
+      }
     } else {
-      ElMessage.warning(res.data?.instance?.errorMsg || '试运行结束（存在失败节点）')
+      runResult.value = null
+    }
+    logVisible.value = true
+    if (slim.status === 'SUCCESS') {
+      ElMessage.success(`试运行成功${slim.durationMs != null ? ` · ${slim.durationMs}ms` : ''}`)
+    } else {
+      ElMessage.warning(slim.errorMsg || '试运行结束（存在失败节点）')
     }
   } finally {
     running.value = false

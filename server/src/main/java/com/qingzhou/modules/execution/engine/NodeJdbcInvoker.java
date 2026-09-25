@@ -59,7 +59,6 @@ public class NodeJdbcInvoker {
             Map<String, Object> output = new LinkedHashMap<>();
             output.put("affectedRows", affected);
             output.put("rowCount", 0);
-            output.put("columns", List.of());
             output.put("rows", List.of());
             output.put("truncated", false);
             return DbCallResult.okUpdate(displayUrl, affected, output);
@@ -104,13 +103,11 @@ public class NodeJdbcInvoker {
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("rowCount", rows.size());
         output.put("affectedRows", 0);
-        output.put("columns", columns);
         output.put("rows", rows);
         output.put("truncated", truncated);
         Map<String, Object> logBody = new LinkedHashMap<>();
         logBody.put("rowCount", rows.size());
         logBody.put("affectedRows", 0);
-        logBody.put("columns", columns);
         logBody.put("preview", preview);
         logBody.put("truncated", truncated || rows.size() > DatabaseComponentSupport.PREVIEW_ROWS);
         return DbCallResult.okQuery(displayUrl, rows.size(), columns, logBody, output, truncated);

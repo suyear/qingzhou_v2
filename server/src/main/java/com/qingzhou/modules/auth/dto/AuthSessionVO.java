@@ -14,6 +14,7 @@ public class AuthSessionVO {
     private String username;
     private String displayName;
     private List<String> roles;
+    private List<String> permissions;
     private boolean mustChangePassword;
     private long expiresInSeconds;
 }

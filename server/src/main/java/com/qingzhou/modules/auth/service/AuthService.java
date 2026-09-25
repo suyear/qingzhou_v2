@@ -16,6 +16,7 @@ import com.qingzhou.modules.auth.dto.UserVO;
 import com.qingzhou.modules.auth.entity.SysRole;
 import com.qingzhou.modules.auth.entity.SysUser;
 import com.qingzhou.modules.auth.entity.SysUserRole;
+import com.qingzhou.modules.auth.mapper.SysPermissionMapper;
 import com.qingzhou.modules.auth.mapper.SysRoleMapper;
 import com.qingzhou.modules.auth.mapper.SysUserMapper;
 import com.qingzhou.modules.auth.mapper.SysUserRoleMapper;
@@ -44,6 +45,7 @@ public class AuthService {
     private final SysUserMapper userMapper;
     private final SysRoleMapper roleMapper;
     private final SysUserRoleMapper userRoleMapper;
+    private final SysPermissionMapper permissionMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService jwtTokenService;
     private final LicenseService licenseService;
@@ -114,6 +116,7 @@ public class AuthService {
                 .username(fresh.getUsername())
                 .displayName(fresh.getDisplayName())
                 .roles(fresh.getRoles())
+                .permissions(fresh.getPermissions())
                 .mustChangePassword(fresh.isMustChangePassword())
                 .expiresInSeconds(jwtTokenService.ttlSeconds())
                 .build();
@@ -219,6 +222,7 @@ public class AuthService {
                 .username(principal.getUsername())
                 .displayName(principal.getDisplayName())
                 .roles(principal.getRoles())
+                .permissions(principal.getPermissions())
                 .mustChangePassword(principal.isMustChangePassword())
                 .expiresInSeconds(jwtTokenService.ttlSeconds())
                 .build();
@@ -226,6 +230,16 @@ public class AuthService {
 
     private AuthUserPrincipal loadPrincipal(SysUser user) {
         List<String> roles = userMapper.selectRoleCodesByUserId(user.getId());
+        List<String> permissions = permissionMapper.selectPermCodesByUserId(user.getId());
+        if (roles.contains("ADMIN") && (permissions == null || permissions.isEmpty())) {
+            // V7 未执行时兜底：管理员视为全权限
+            permissions = List.of(
+                    "menu:workbench", "menu:components", "menu:workflows", "menu:credentials",
+                    "menu:schedules", "menu:executions", "menu:openapi",
+                    "menu:users", "menu:roles", "menu:license", "menu:audit", "menu:settings",
+                    "component:write", "credential:write", "workflow:write", "schedule:write",
+                    "openapi:write", "system:admin");
+        }
         return new AuthUserPrincipal(
                 user.getId(),
                 user.getUsername(),
@@ -233,7 +247,8 @@ public class AuthService {
                 user.getPasswordHash(),
                 user.getStatus() != null && user.getStatus() == 1,
                 user.getMustChangePassword() != null && user.getMustChangePassword() == 1,
-                roles);
+                roles,
+                permissions == null ? List.of() : permissions);
     }
 
     private void assignRoles(Long userId, List<String> roleCodes) {

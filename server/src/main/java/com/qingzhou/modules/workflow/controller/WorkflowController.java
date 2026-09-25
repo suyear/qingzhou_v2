@@ -5,9 +5,10 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.qingzhou.common.api.PageQuery;
 import com.qingzhou.common.api.R;
-import com.qingzhou.modules.execution.dto.ExecutionVO;
+import com.qingzhou.modules.execution.dto.RunResultVO;
 import com.qingzhou.modules.execution.dto.TryRunRequest;
 import com.qingzhou.modules.execution.engine.WorkflowEngine;
+import com.qingzhou.modules.execution.support.ExecutionResultAssembler;
 import com.qingzhou.modules.workflow.dto.WorkflowSaveRequest;
 import com.qingzhou.modules.workflow.dto.WorkflowVO;
 import com.qingzhou.modules.workflow.entity.Workflow;
@@ -31,6 +32,7 @@ public class WorkflowController {
 
     private final WorkflowService workflowService;
     private final WorkflowEngine workflowEngine;
+    private final ExecutionResultAssembler executionResultAssembler;
 
     @GetMapping
     public R<IPage<Workflow>> page(PageQuery query, @RequestParam(required = false) String status) {
@@ -60,8 +62,9 @@ public class WorkflowController {
     }
 
     @PostMapping("/{id}/try-run")
-    public R<ExecutionVO> tryRun(@PathVariable Long id, @RequestBody(required = false) TryRunRequest request) {
-        return R.ok(workflowEngine.tryRun(id, request == null ? null : request.getInput()));
+    public R<RunResultVO> tryRun(@PathVariable Long id, @RequestBody(required = false) TryRunRequest request) {
+        return R.ok(executionResultAssembler.from(
+                workflowEngine.tryRun(id, request == null ? null : request.getInput())));
     }
 
     @PostMapping("/{id}/publish")

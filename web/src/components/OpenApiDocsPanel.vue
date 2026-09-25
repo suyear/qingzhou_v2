@@ -22,6 +22,18 @@
     </section>
 
     <section class="doc-section">
+      <h3>请求体</h3>
+      <p class="tip">Body 为工作流<strong>入参扁平 JSON</strong>（不是再包一层 <code>input</code>），与工作流设计器里定义的字段一致。</p>
+      <DetailCodeBlock title="示例" value='{"id":"10001","name":"demo"}' tone="ink" max-height="80px" />
+    </section>
+
+    <section class="doc-section">
+      <h3>成功响应</h3>
+      <p class="tip">与编排试跑、立即触发返回同一套精简结构：业务 <code>output</code> + 节点摘要 <code>steps</code>，不含完整 instance 实体。</p>
+      <DetailCodeBlock title="示例" :value="successSample" tone="ink" max-height="280px" />
+    </section>
+
+    <section class="doc-section">
       <h3>请求头</h3>
       <el-table :data="headers" size="small" border class="doc-table">
         <el-table-column prop="name" label="Header" width="140" />
@@ -96,6 +108,30 @@ const errors = [
 
 const signSample = `stringToSign = MD5(body) + timestamp + nonce + secret
 signature    = Hex(HMAC-SHA256(key=secret, data=stringToSign)).toLowerCase()`
+
+const successSample = `{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "executionId": 12,
+    "executionNo": "E20260101120000xxxx",
+    "status": "SUCCESS",
+    "durationMs": 86,
+    "errorMsg": null,
+    "output": {
+      "node_query": { "rowCount": 1, "rows": [{ "id": 1, "name": "demo" }] }
+    },
+    "steps": [
+      {
+        "nodeId": "node_query",
+        "nodeName": "查询",
+        "status": "SUCCESS",
+        "durationMs": 40,
+        "response": { "rowCount": 1, "rows": [{ "id": 1, "name": "demo" }] }
+      }
+    ]
+  }
+}`
 
 const curlSample = `curl -X POST 'https://your-host/openapi/v1/workflows/demo_flow/execute' \\
   -H 'Content-Type: application/json' \\
