@@ -1,6 +1,6 @@
 <template>
   <div class="openapi-page">
-    <PageHeader title="开放平台" desc="创建应用、授权已发布的工作流，用调用助手试一下就能给别人调。">
+    <PageHeader title="开放平台" desc="把接口服务与组合接口服务授权给外部应用，同一套签名即可调用。">
       <template v-if="pageTab === 'apps'">
         <el-input
           v-model="keyword"
@@ -31,11 +31,16 @@
 
     <template v-if="pageTab === 'apps'">
       <div v-if="showGuide" class="flow-strip">
-        <div class="flow-step" :class="{ done: stats.published > 0 }">
+        <div class="flow-step" :class="{ done: stats.openable > 0 }">
           <span class="flow-badge">1</span>
           <div class="flow-body">
-            <strong>发布工作流</strong>
-            <p>{{ stats.published > 0 ? `已有 ${stats.published} 个可授权` : '编排完成后点发布' }}</p>
+            <strong>准备可开放资源</strong>
+            <p>
+              {{ stats.openable > 0
+                ? `接口 ${stats.enabledComponents} · 组合 ${stats.published}`
+                : '启用接口组件或发布工作流' }}
+            </p>
+            <el-button type="primary" link @click="$router.push('/components')">去组件</el-button>
             <el-button type="primary" link @click="$router.push('/workflows')">去编排</el-button>
           </div>
         </div>
@@ -53,7 +58,7 @@
           <span class="flow-badge">3</span>
           <div class="flow-body">
             <strong>授权并试调</strong>
-            <p>{{ stats.ready > 0 ? `${stats.ready} 个应用已就绪` : '授权工作流后调用助手试调' }}</p>
+            <p>{{ stats.ready > 0 ? `${stats.ready} 个应用已就绪` : '授权资源后用调用助手试调' }}</p>
             <el-button v-if="firstReadyApp" type="primary" link @click="openInvoke(firstReadyApp)">打开调用助手</el-button>
           </div>
         </div>
@@ -71,9 +76,9 @@
           <div class="stat-hint">近 7 日调用 {{ openapiExtra.invoke7d ?? 0 }} · 失败 {{ openapiExtra.fail7d ?? 0 }}</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">已发布工作流</div>
-          <div class="stat-num">{{ stats.published }}</div>
-          <el-button v-if="!stats.published" type="primary" link @click="$router.push('/workflows')">去发布</el-button>
+          <div class="stat-label">可开放资源</div>
+          <div class="stat-num">{{ stats.openable }}</div>
+          <div class="stat-hint">接口 {{ stats.enabledComponents }} · 组合 {{ stats.published }}</div>
         </div>
       </div>
 
@@ -110,10 +115,10 @@
               <StatusTag :type="readinessTag(row).type" :label="readinessTag(row).label" />
             </template>
           </el-table-column>
-          <el-table-column label="授权" width="88" align="center">
+          <el-table-column label="授权" width="140" align="center">
             <template #default="{ row }">
               <el-button type="primary" link @click.stop="openGrant(row)">
-                {{ row.grantedCount > 0 ? `${row.grantedCount} 个` : '去授权' }}
+                {{ grantSummaryText(row) }}
               </el-button>
             </template>
           </el-table-column>
@@ -128,7 +133,7 @@
               <div class="qz-ops" @click.stop>
                 <el-button
                   type="primary"
-                  :disabled="row.status !== 1 || !row.grantedCount"
+                  :disabled="row.status !== 1 || !isGranted(row)"
                   @click="openInvoke(row)"
                 >
                   调用助手
@@ -138,7 +143,7 @@
                   <template #dropdown>
                     <el-dropdown-menu>
                       <el-dropdown-item command="detail">应用详情</el-dropdown-item>
-                      <el-dropdown-item command="grant">授权工作流</el-dropdown-item>
+                      <el-dropdown-item command="grant">授权资源</el-dropdown-item>
                       <el-dropdown-item command="edit">限流 / 白名单</el-dropdown-item>
                       <el-dropdown-item command="records">调用记录</el-dropdown-item>
                       <el-dropdown-item command="docs">查看接入文档</el-dropdown-item>
@@ -153,7 +158,7 @@
           </el-table-column>
           <template #empty>
             <el-empty v-if="!loading && !loadError" description="还没有开放应用">
-              <p class="empty-hint">三步即可对外提供 API：发布工作流 → 创建应用 → 授权试调</p>
+              <p class="empty-hint">三步即可对外提供 API：准备资源 → 创建应用 → 授权试调</p>
               <el-button type="primary" @click="openCreate">新建应用</el-button>
               <el-button @click="pageTab = 'docs'">先看接入文档</el-button>
             </el-empty>
@@ -187,19 +192,19 @@
                 <span class="check-dot" />
                 <span>应用已{{ drawerApp.status === 1 ? '启用' : '停用' }}</span>
               </div>
-              <div class="check-item" :class="{ ok: drawerApp.grantedCount > 0 }">
+              <div class="check-item" :class="{ ok: isGranted(drawerApp) }">
                 <span class="check-dot" />
-                <span>{{ drawerApp.grantedCount > 0 ? `已授权 ${drawerApp.grantedCount} 个工作流` : '尚未授权工作流' }}</span>
+                <span>{{ isGranted(drawerApp) ? `已授权 ${grantSummaryText(drawerApp)}` : '尚未授权任何资源' }}</span>
               </div>
             </div>
             <DetailCopyField label="App Key" :value="drawerApp.appKey" copy-message="已复制" />
             <DetailMetaList class="drawer-meta" :items="drawerMetaItems" />
           </DetailSection>
           <DetailActions>
-            <el-button type="primary" :disabled="drawerApp.status !== 1 || !drawerApp.grantedCount" @click="openInvoke(drawerApp); drawerVisible = false">
+            <el-button type="primary" :disabled="drawerApp.status !== 1 || !isGranted(drawerApp)" @click="openInvoke(drawerApp); drawerVisible = false">
               调用助手
             </el-button>
-            <el-button @click="openGrant(drawerApp); drawerVisible = false">授权工作流</el-button>
+            <el-button @click="openGrant(drawerApp); drawerVisible = false">授权资源</el-button>
             <el-button @click="openEdit(drawerApp)">应用设置</el-button>
             <el-button @click="goRecords(drawerApp)">调用记录</el-button>
             <el-button @click="goProblems(drawerApp)">失败链路</el-button>
@@ -259,40 +264,73 @@
     </el-dialog>
 
     <!-- 授权 -->
-    <el-dialog v-model="grantVisible" :title="`授权工作流 · ${currentApp?.appName || ''}`" width="600px" destroy-on-close>
-      <p class="hint">勾选允许该应用调用的<strong>已发布</strong>工作流。可搜索名称或编码。</p>
+    <el-dialog v-model="grantVisible" :title="`授权资源 · ${currentApp?.appName || ''}`" width="680px" destroy-on-close>
+      <p class="hint">勾选允许该应用调用的<strong>接口服务</strong>与<strong>组合接口服务</strong>。可搜索名称或编码。</p>
       <div class="grant-toolbar">
-        <el-input v-model="grantKeyword" placeholder="搜索工作流" clearable />
-        <el-button text type="primary" @click="selectAllGrants">全选</el-button>
-        <el-button text @click="grantedIds = []">清空</el-button>
+        <el-input v-model="grantKeyword" placeholder="搜索组件 / 工作流" clearable />
+        <el-button text type="primary" @click="selectAllGrants">全选当前结果</el-button>
+        <el-button text @click="clearAllGrants">清空</el-button>
       </div>
-      <div v-if="filteredGrantWorkflows.length" class="grant-grid">
-        <label
-          v-for="wf in filteredGrantWorkflows"
-          :key="wf.id"
-          class="grant-card"
-          :class="{ active: grantedIds.includes(wf.id) }"
-        >
-          <el-checkbox :model-value="grantedIds.includes(wf.id)" @change="toggleGrant(wf.id, $event)" />
-          <div class="grant-card-body">
-            <div class="grant-name">{{ wf.workflowName }}</div>
-            <div class="grant-code mono">{{ wf.workflowCode }}</div>
-          </div>
-        </label>
+
+      <div class="grant-section">
+        <div class="grant-section-head">
+          <strong>接口服务（组件）</strong>
+          <span class="muted">已选 {{ grantedComponentIds.length }}</span>
+        </div>
+        <div v-if="filteredGrantComponents.length" class="grant-grid">
+          <label
+            v-for="comp in filteredGrantComponents"
+            :key="`c-${comp.id}`"
+            class="grant-card"
+            :class="{ active: grantedComponentIds.includes(comp.id) }"
+          >
+            <el-checkbox :model-value="grantedComponentIds.includes(comp.id)" @change="toggleGrantComponent(comp.id, $event)" />
+            <div class="grant-card-body">
+              <div class="grant-name">{{ comp.componentName }}</div>
+              <div class="grant-code mono">{{ comp.componentCode }}</div>
+            </div>
+          </label>
+        </div>
+        <el-empty v-else-if="!enabledComponents.length" description="暂无启用中的接口组件">
+          <el-button type="primary" @click="$router.push('/components')">去接入组件</el-button>
+        </el-empty>
+        <p v-else class="hint">没有匹配的接口服务</p>
       </div>
-      <el-empty v-else-if="!publishedWorkflows.length" description="暂无已发布工作流">
-        <el-button type="primary" @click="$router.push('/workflows')">去编排发布</el-button>
-      </el-empty>
-      <el-empty v-else description="没有匹配的工作流" />
+
+      <div class="grant-section">
+        <div class="grant-section-head">
+          <strong>组合接口服务（工作流）</strong>
+          <span class="muted">已选 {{ grantedWorkflowIds.length }}</span>
+        </div>
+        <div v-if="filteredGrantWorkflows.length" class="grant-grid">
+          <label
+            v-for="wf in filteredGrantWorkflows"
+            :key="`w-${wf.id}`"
+            class="grant-card"
+            :class="{ active: grantedWorkflowIds.includes(wf.id) }"
+          >
+            <el-checkbox :model-value="grantedWorkflowIds.includes(wf.id)" @change="toggleGrantWorkflow(wf.id, $event)" />
+            <div class="grant-card-body">
+              <div class="grant-name">{{ wf.workflowName }}</div>
+              <div class="grant-code mono">{{ wf.workflowCode }}</div>
+            </div>
+          </label>
+        </div>
+        <el-empty v-else-if="!publishedWorkflows.length" description="暂无已发布工作流">
+          <el-button type="primary" @click="$router.push('/workflows')">去编排发布</el-button>
+        </el-empty>
+        <p v-else class="hint">没有匹配的组合接口服务</p>
+      </div>
+
       <template #footer>
         <div class="dialog-footer-row">
-          <span class="grant-footer-hint">已选 {{ grantedIds.length }} 个</span>
+          <span class="grant-footer-hint">接口 {{ grantedComponentIds.length }} · 组合 {{ grantedWorkflowIds.length }}</span>
           <el-button @click="grantVisible = false">取消</el-button>
           <el-button type="primary" :loading="granting" @click="saveGrant()">保存授权</el-button>
           <el-button
             type="success"
             :loading="granting"
-            :disabled="!grantedIds.length"
+            :disabled="!grantedComponentIds.length && !grantedWorkflowIds.length"
             @click="saveGrant(true)"
           >
             保存并试调
@@ -325,21 +363,27 @@
 
     <!-- 调用助手 -->
     <el-dialog v-model="invokeVisible" :title="invokeTitle" width="960px" destroy-on-close class="invoke-dialog" @closed="resetInvoke">
-      <div v-if="!invokeWorkflows.length" class="invoke-empty">
-        <el-empty description="该应用尚未授权任何工作流">
-          <el-button type="primary" @click="openGrantFromInvoke">去授权工作流</el-button>
+      <div v-if="!hasInvokeResources" class="invoke-empty">
+        <el-empty description="该应用尚未授权任何资源">
+          <el-button type="primary" @click="openGrantFromInvoke">去授权资源</el-button>
         </el-empty>
       </div>
       <div v-else class="invoke-layout">
         <div class="invoke-left">
           <el-form label-position="top">
-            <el-form-item label="选择工作流" required>
-              <el-select v-model="invokeForm.workflowCode" filterable style="width: 100%">
+            <el-form-item label="资源类型" required>
+              <el-radio-group v-model="invokeForm.resourceType" @change="onInvokeResourceTypeChange">
+                <el-radio-button value="COMPONENT" :disabled="!invokeComponents.length">接口服务</el-radio-button>
+                <el-radio-button value="WORKFLOW" :disabled="!invokeWorkflows.length">组合接口服务</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item :label="invokeForm.resourceType === 'COMPONENT' ? '选择接口服务' : '选择组合接口服务'" required>
+              <el-select v-model="invokeForm.resourceCode" filterable style="width: 100%">
                 <el-option
-                  v-for="wf in invokeWorkflows"
-                  :key="wf.id"
-                  :label="`${wf.workflowName} (${wf.workflowCode})`"
-                  :value="wf.workflowCode"
+                  v-for="item in invokeResourceOptions"
+                  :key="item.code"
+                  :label="item.label"
+                  :value="item.code"
                 />
               </el-select>
             </el-form-item>
@@ -359,21 +403,22 @@
                 </li>
               </ul>
             </div>
-            <p v-else class="hint">该工作流未预定义入参，可用下方键值对或 JSON 自行添加。</p>
-            <el-form-item label="触发入参">
+            <p v-else class="hint">该资源未预定义入参，可用下方键值对或 JSON 自行添加。</p>
+            <el-form-item label="调用入参">
               <ScheduleTriggerInput
                 ref="invokeInputRef"
                 v-model="invokeInputData"
                 compact
-                :input-schema="selectedInvokeWorkflow?.inputSchema"
+                :input-schema="selectedInvokeSchema"
               />
             </el-form-item>
+            <p class="hint invoke-footnote">对外 body = 下方扁平 JSON；本页控制台 <code>/invoke</code> 的包装仅用于试调代理。</p>
           </el-form>
           <div class="invoke-btns">
-            <el-button type="primary" :loading="invoking" :disabled="!invokeForm.workflowCode" @click="runInvoke">
+            <el-button type="primary" :loading="invoking" :disabled="!invokeForm.resourceCode" @click="runInvoke">
               走网关试调
             </el-button>
-            <el-button :loading="previewing" :disabled="!invokeForm.workflowCode" @click="makePreview">
+            <el-button :loading="previewing" :disabled="!invokeForm.resourceCode" @click="makePreview">
               生成 curl
             </el-button>
           </div>
@@ -389,13 +434,30 @@
                   <template #extra>
                     <el-button v-if="invokeOk" type="primary" link @click="goRecords(invokeApp)">查看记录</el-button>
                   </template>
-                  <DetailCodeBlock
-                    title="响应"
-                    :value="invokeResult.response"
-                    copy-message="已复制响应"
-                    max-height="300px"
-                  />
                 </DetailResultBanner>
+                <DetailCodeBlock
+                  v-if="invokeRequestBody"
+                  class="mt12"
+                  title="请求入参"
+                  :value="invokeRequestBody"
+                  copy-message="已复制入参"
+                  max-height="160px"
+                />
+                <DetailCodeBlock
+                  class="mt12"
+                  title="业务输出 output"
+                  :value="invokeBusinessOutput"
+                  copy-message="已复制输出"
+                  max-height="280px"
+                />
+                <DetailCodeBlock
+                  v-if="invokeMetaLine"
+                  class="mt12"
+                  title="调用摘要"
+                  :value="invokeMetaLine"
+                  tone="ink"
+                  max-height="80px"
+                />
               </div>
               <DetailEmpty v-else text="点击「走网关试调」查看响应" />
             </el-tab-pane>
@@ -410,7 +472,7 @@
                   max-height="320px"
                 />
                 <p v-if="preview.tip" class="hint">{{ preview.tip }}</p>
-                <p class="hint">curl 上方注释来自工作流 schema，复制后可直接给对接同学。</p>
+                <p class="hint">curl body 与试调入参、接入文档示例同源；复制后可直接给对接同学。</p>
               </div>
               <DetailEmpty v-else text="点击「生成 curl」或试调成功后自动出现" />
             </el-tab-pane>
@@ -444,13 +506,17 @@ import DetailEmpty from '@/components/detail/DetailEmpty.vue'
 import { askConfirm } from '@/utils/confirm'
 import { copyText, formatTime } from '@/utils/format'
 import { annotateCurlWithFields, examplePayloadFromSchema, schemaFieldGuide } from '@/utils/triggerInput'
+import { grantSummary, mergeComponentInputSchema, OPENAPI_DEMO_INPUT } from '@/utils/openapiContract'
 import { pageWorkflows } from '@/api/workflow'
+import { pageComponents } from '@/api/component'
 import { networkErrorMessage } from '@/api/http'
 import { getModuleStats } from '@/api/dashboard'
 import {
+  bindOpenapiComponents,
   bindOpenapiWorkflows,
   createOpenapiApp,
   invokeOpenapi,
+  listGrantedComponents,
   listGrantedWorkflows,
   pageOpenapiApps,
   previewOpenapiInvoke,
@@ -470,6 +536,7 @@ const loading = ref(false)
 const loadError = ref('')
 const revealedKeys = reactive({})
 const publishedWorkflows = ref([])
+const enabledComponents = ref([])
 const createVisible = ref(false)
 const creating = ref(false)
 const createForm = reactive({ appName: '', remark: '', rateLimitQps: 10, ipWhitelist: '' })
@@ -480,7 +547,8 @@ const grantVisible = ref(false)
 const granting = ref(false)
 const grantKeyword = ref('')
 const currentApp = ref(null)
-const grantedIds = ref([])
+const grantedWorkflowIds = ref([])
+const grantedComponentIds = ref([])
 const drawerVisible = ref(false)
 const drawerApp = ref(null)
 const invokeVisible = ref(false)
@@ -488,7 +556,7 @@ const previewing = ref(false)
 const invoking = ref(false)
 const invokeApp = ref(null)
 const invokeResultTab = ref('result')
-const invokeForm = reactive({ workflowCode: '' })
+const invokeForm = reactive({ resourceType: 'WORKFLOW', resourceCode: '' })
 const invokeInputData = ref(null)
 const invokeInputRef = ref(null)
 const preview = ref(null)
@@ -498,35 +566,80 @@ const secretConfirmed = ref(false)
 const pendingGrantApp = ref(null)
 const createdSecret = reactive({ appKey: '', appSecret: '' })
 
+function isGranted(row) {
+  if (!row) return false
+  return (row.grantedCount ?? 0) > 0
+    || (row.grantedWorkflowCount ?? 0) > 0
+    || (row.grantedComponentCount ?? 0) > 0
+}
+
+function grantSummaryText(row) {
+  return grantSummary(row)
+}
+
 const stats = computed(() => ({
   apps: records.value.length,
-  ready: records.value.filter((item) => item.status === 1 && item.grantedCount > 0).length,
+  ready: records.value.filter((item) => item.status === 1 && isGranted(item)).length,
   published: publishedWorkflows.value.length,
+  enabledComponents: enabledComponents.value.length,
+  openable: publishedWorkflows.value.length + enabledComponents.value.length,
 }))
 const openapiExtra = ref({ invoke7d: 0, fail7d: 0 })
 
 const firstReadyApp = computed(() =>
-  records.value.find((item) => item.status === 1 && item.grantedCount > 0),
+  records.value.find((item) => item.status === 1 && isGranted(item)),
 )
 
 const invokeTitle = computed(() => (invokeApp.value ? `调用助手 · ${invokeApp.value.appName}` : '调用助手'))
 
 const invokeWorkflows = computed(() => {
-  const ids = new Set(grantedIds.value)
+  const ids = new Set(grantedWorkflowIds.value)
   return publishedWorkflows.value.filter((item) => ids.has(Number(item.id)))
 })
 
+const invokeComponents = computed(() => {
+  const ids = new Set(grantedComponentIds.value)
+  return enabledComponents.value.filter((item) => ids.has(Number(item.id)))
+})
+
+const hasInvokeResources = computed(() => invokeWorkflows.value.length > 0 || invokeComponents.value.length > 0)
+
+const invokeResourceOptions = computed(() => {
+  if (invokeForm.resourceType === 'COMPONENT') {
+    return invokeComponents.value.map((item) => ({
+      code: item.componentCode,
+      label: `${item.componentName} (${item.componentCode})`,
+    }))
+  }
+  return invokeWorkflows.value.map((item) => ({
+    code: item.workflowCode,
+    label: `${item.workflowName} (${item.workflowCode})`,
+  }))
+})
+
 const selectedInvokeWorkflow = computed(() =>
-  invokeWorkflows.value.find((item) => item.workflowCode === invokeForm.workflowCode) || null,
+  invokeWorkflows.value.find((item) => item.workflowCode === invokeForm.resourceCode) || null,
 )
 
-const invokeFieldGuide = computed(() => schemaFieldGuide(selectedInvokeWorkflow.value?.inputSchema))
+const selectedInvokeComponent = computed(() =>
+  invokeComponents.value.find((item) => item.componentCode === invokeForm.resourceCode) || null,
+)
+
+const selectedInvokeSchema = computed(() => {
+  if (invokeForm.resourceType === 'COMPONENT') {
+    return mergeComponentInputSchema(selectedInvokeComponent.value)
+  }
+  return selectedInvokeWorkflow.value?.inputSchema || null
+})
+
+const invokeFieldGuide = computed(() => schemaFieldGuide(selectedInvokeSchema.value))
 
 const annotatedCurl = computed(() => annotateCurlWithFields(preview.value?.curl, invokeFieldGuide.value))
 const drawerMetaItems = computed(() => {
   const app = drawerApp.value
   if (!app) return []
   return [
+    { label: '授权', value: grantSummaryText(app) },
     { label: 'QPS', value: app.rateLimitQps > 0 ? app.rateLimitQps : '不限制' },
     { label: 'IP 白名单', value: formatIps(app.ipWhitelist) },
     { label: '更新时间', value: formatTime(app.updateTime) },
@@ -542,6 +655,14 @@ const filteredGrantWorkflows = computed(() => {
   )
 })
 
+const filteredGrantComponents = computed(() => {
+  const q = grantKeyword.value.trim().toLowerCase()
+  if (!q) return enabledComponents.value
+  return enabledComponents.value.filter(
+    (item) => item.componentName.toLowerCase().includes(q) || item.componentCode.toLowerCase().includes(q),
+  )
+})
+
 const invokeOk = computed(() => {
   const body = invokeResult.value?.response
   if (!body || typeof body !== 'object') return false
@@ -553,11 +674,50 @@ const invokeOk = computed(() => {
   return body.code === 0
 })
 
+const invokePayloadData = computed(() => {
+  const body = invokeResult.value?.response
+  if (!body || typeof body !== 'object') return null
+  return body.data && typeof body.data === 'object' ? body.data : null
+})
+
+const invokeBusinessOutput = computed(() => {
+  const data = invokePayloadData.value
+  if (!data) {
+    return invokeResult.value?.response ?? ''
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'output')) {
+    return data.output
+  }
+  return data
+})
+
+const invokeRequestBody = computed(() => {
+  const raw = invokeResult.value?.preview?.body
+  if (!raw) return ''
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw) : raw
+  } catch {
+    return raw
+  }
+})
+
+const invokeMetaLine = computed(() => {
+  const data = invokePayloadData.value
+  if (!data) return ''
+  const parts = [
+    data.executionNo ? `executionNo=${data.executionNo}` : '',
+    data.status ? `status=${data.status}` : '',
+    data.durationMs != null ? `durationMs=${data.durationMs}` : '',
+    data.errorMsg ? `error=${data.errorMsg}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ')
+})
+
 watch(secretVisible, (open) => {
   if (!open) secretConfirmed.value = false
 })
 watch(
-  () => invokeForm.workflowCode,
+  () => [invokeForm.resourceType, invokeForm.resourceCode],
   () => {
     invokeInputData.value = null
   },
@@ -565,7 +725,7 @@ watch(
 
 function readinessTag(row) {
   if (row.status !== 1) return { label: '已停用', type: 'info' }
-  if (!row.grantedCount) return { label: '待授权', type: 'warning' }
+  if (!isGranted(row)) return { label: '待授权', type: 'warning' }
   return { label: '可调用', type: 'success' }
 }
 
@@ -611,6 +771,15 @@ async function load() {
 async function loadPublished() {
   const res = await pageWorkflows({ current: 1, size: 100 })
   publishedWorkflows.value = (res.data?.records || []).filter((item) => item.status === 'PUBLISHED')
+}
+
+async function loadEnabledComponents() {
+  const res = await pageComponents({ current: 1, size: 200 })
+  enabledComponents.value = (res.data?.records || []).filter((item) => Number(item.status) === 1)
+}
+
+async function loadGrantableResources() {
+  await Promise.all([loadPublished(), loadEnabledComponents()])
 }
 
 function formatIps(raw) {
@@ -718,37 +887,70 @@ async function copyAllSecrets() {
 async function openGrant(row) {
   currentApp.value = row
   grantKeyword.value = ''
-  await loadPublished()
-  const res = await listGrantedWorkflows(row.id)
-  grantedIds.value = (res.data || []).map((id) => Number(id))
+  await loadGrantableResources()
+  const [wfRes, compRes] = await Promise.all([
+    listGrantedWorkflows(row.id),
+    listGrantedComponents(row.id),
+  ])
+  grantedWorkflowIds.value = (wfRes.data || []).map((id) => Number(id))
+  grantedComponentIds.value = (compRes.data || []).map((id) => Number(id))
   grantVisible.value = true
 }
 
-function toggleGrant(id, checked) {
+function toggleGrantWorkflow(id, checked) {
   const numId = Number(id)
   if (checked) {
-    if (!grantedIds.value.includes(numId)) grantedIds.value.push(numId)
+    if (!grantedWorkflowIds.value.includes(numId)) grantedWorkflowIds.value.push(numId)
   } else {
-    grantedIds.value = grantedIds.value.filter((item) => item !== numId)
+    grantedWorkflowIds.value = grantedWorkflowIds.value.filter((item) => item !== numId)
+  }
+}
+
+function toggleGrantComponent(id, checked) {
+  const numId = Number(id)
+  if (checked) {
+    if (!grantedComponentIds.value.includes(numId)) grantedComponentIds.value.push(numId)
+  } else {
+    grantedComponentIds.value = grantedComponentIds.value.filter((item) => item !== numId)
   }
 }
 
 function selectAllGrants() {
-  grantedIds.value = filteredGrantWorkflows.value.map((item) => Number(item.id))
+  grantedWorkflowIds.value = [
+    ...new Set([
+      ...grantedWorkflowIds.value,
+      ...filteredGrantWorkflows.value.map((item) => Number(item.id)),
+    ]),
+  ]
+  grantedComponentIds.value = [
+    ...new Set([
+      ...grantedComponentIds.value,
+      ...filteredGrantComponents.value.map((item) => Number(item.id)),
+    ]),
+  ]
+}
+
+function clearAllGrants() {
+  grantedWorkflowIds.value = []
+  grantedComponentIds.value = []
 }
 
 async function saveGrant(andInvoke = false) {
   granting.value = true
   try {
-    await bindOpenapiWorkflows(currentApp.value.id, grantedIds.value)
-    ElMessage.success(grantedIds.value.length ? '授权已更新' : '已撤销全部授权')
+    await Promise.all([
+      bindOpenapiWorkflows(currentApp.value.id, grantedWorkflowIds.value),
+      bindOpenapiComponents(currentApp.value.id, grantedComponentIds.value),
+    ])
+    const total = grantedWorkflowIds.value.length + grantedComponentIds.value.length
+    ElMessage.success(total ? '授权已更新' : '已撤销全部授权')
     const app = currentApp.value
     grantVisible.value = false
     await load()
     if (drawerApp.value?.id === app?.id) {
       drawerApp.value = records.value.find((item) => item.id === app.id) || drawerApp.value
     }
-    if (andInvoke && app && grantedIds.value.length) {
+    if (andInvoke && app && total) {
       const latest = records.value.find((item) => item.id === app.id) || app
       await openInvoke(latest)
     }
@@ -802,7 +1004,8 @@ function resetInvoke() {
   preview.value = null
   invokeResult.value = null
   invokeResultTab.value = 'result'
-  invokeForm.workflowCode = ''
+  invokeForm.resourceType = 'WORKFLOW'
+  invokeForm.resourceCode = ''
   invokeInputData.value = null
 }
 
@@ -825,13 +1028,44 @@ async function toggleStatus(row, status) {
   await load()
 }
 
+async function loadAppGrants(appId) {
+  const [wfRes, compRes] = await Promise.all([
+    listGrantedWorkflows(appId),
+    listGrantedComponents(appId),
+  ])
+  grantedWorkflowIds.value = (wfRes.data || []).map((id) => Number(id))
+  grantedComponentIds.value = (compRes.data || []).map((id) => Number(id))
+}
+
+function pickDefaultInvokeSelection() {
+  if (invokeComponents.value.length) {
+    invokeForm.resourceType = 'COMPONENT'
+    invokeForm.resourceCode = invokeComponents.value[0].componentCode
+    return
+  }
+  if (invokeWorkflows.value.length) {
+    invokeForm.resourceType = 'WORKFLOW'
+    invokeForm.resourceCode = invokeWorkflows.value[0].workflowCode
+    return
+  }
+  invokeForm.resourceType = 'WORKFLOW'
+  invokeForm.resourceCode = ''
+}
+
+function onInvokeResourceTypeChange() {
+  const options = invokeResourceOptions.value
+  invokeForm.resourceCode = options[0]?.code || ''
+  invokeInputData.value = null
+  preview.value = null
+  invokeResult.value = null
+}
+
 async function openInvoke(row) {
   invokeApp.value = row
   resetInvoke()
-  await loadPublished()
-  const res = await listGrantedWorkflows(row.id)
-  grantedIds.value = (res.data || []).map((id) => Number(id))
-  invokeForm.workflowCode = invokeWorkflows.value[0]?.workflowCode || ''
+  await loadGrantableResources()
+  await loadAppGrants(row.id)
+  pickDefaultInvokeSelection()
   invokeVisible.value = true
 }
 
@@ -841,8 +1075,8 @@ function openGrantFromInvoke() {
 }
 
 function fillInvokeExample() {
-  const example = examplePayloadFromSchema(selectedInvokeWorkflow.value?.inputSchema)
-  invokeInputData.value = Object.keys(example).length ? example : null
+  const example = examplePayloadFromSchema(selectedInvokeSchema.value)
+  invokeInputData.value = Object.keys(example).length ? example : { ...OPENAPI_DEMO_INPUT }
   ElMessage.success('已填入示例入参，可按实际值修改')
 }
 
@@ -866,20 +1100,29 @@ function parseInvokeInput() {
     : {}
 }
 
+function buildInvokePayload(input) {
+  return {
+    resourceType: invokeForm.resourceType,
+    resourceCode: invokeForm.resourceCode,
+    input,
+  }
+}
+
 async function makePreview() {
-  if (!invokeApp.value || !invokeForm.workflowCode) {
-    ElMessage.warning('请先选择工作流')
+  if (!invokeApp.value || !invokeForm.resourceCode) {
+    ElMessage.warning('请先选择资源')
     return
   }
   let input = invokeInputRef.value?.getPayload?.()
   const empty = !input || typeof input !== 'object' || !Object.keys(input).length
   if (empty) {
-    const example = examplePayloadFromSchema(selectedInvokeWorkflow.value?.inputSchema)
+    const example = examplePayloadFromSchema(selectedInvokeSchema.value)
     if (Object.keys(example).length) {
       invokeInputData.value = example
       input = example
     } else {
-      input = {}
+      input = { ...OPENAPI_DEMO_INPUT }
+      invokeInputData.value = input
     }
   } else {
     const inputError = invokeInputRef.value?.validate?.()
@@ -890,10 +1133,7 @@ async function makePreview() {
   }
   previewing.value = true
   try {
-    const res = await previewOpenapiInvoke(invokeApp.value.id, {
-      workflowCode: invokeForm.workflowCode,
-      input,
-    })
+    const res = await previewOpenapiInvoke(invokeApp.value.id, buildInvokePayload(input))
     preview.value = res.data
     invokeResultTab.value = 'curl'
     ElMessage.success('已生成 curl')
@@ -903,18 +1143,15 @@ async function makePreview() {
 }
 
 async function runInvoke() {
-  if (!invokeApp.value || !invokeForm.workflowCode) {
-    ElMessage.warning('请先选择工作流')
+  if (!invokeApp.value || !invokeForm.resourceCode) {
+    ElMessage.warning('请先选择资源')
     return
   }
   const input = parseInvokeInput()
   if (input == null) return
   invoking.value = true
   try {
-    const res = await invokeOpenapi(invokeApp.value.id, {
-      workflowCode: invokeForm.workflowCode,
-      input,
-    })
+    const res = await invokeOpenapi(invokeApp.value.id, buildInvokePayload(input))
     invokeResult.value = res.data
     preview.value = res.data?.preview || preview.value
     invokeResultTab.value = 'result'
@@ -942,7 +1179,7 @@ async function handleRouteQuery() {
 }
 
 onMounted(async () => {
-  await Promise.all([load(), loadPublished()])
+  await Promise.all([load(), loadGrantableResources()])
   await handleRouteQuery()
 })
 </script>
@@ -1073,11 +1310,19 @@ onMounted(async () => {
   margin-bottom: 12px;
 }
 .grant-toolbar .el-input { flex: 1; }
+.grant-section { margin-bottom: 16px; }
+.grant-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
 .grant-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  max-height: 360px;
+  max-height: 220px;
   overflow-y: auto;
 }
 .grant-card {
@@ -1151,11 +1396,13 @@ onMounted(async () => {
   min-height: 360px;
 }
 .invoke-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.invoke-footnote { margin-top: -4px; }
 .json-toolbar { display: flex; gap: 4px; margin-bottom: 6px; }
 .json-input :deep(textarea) { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 .result-tabs { height: 100%; }
 .result-tabs :deep(.el-tabs__content) { height: calc(100% - 40px); }
 .result-pane { min-width: 0; }
+.mt12 { margin-top: 12px; }
 @media (max-width: 900px) {
   .flow-strip { flex-direction: column; padding-right: 14px; }
   .flow-arrow { display: none; }

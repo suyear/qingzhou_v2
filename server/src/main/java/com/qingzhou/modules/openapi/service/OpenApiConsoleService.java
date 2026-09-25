@@ -2,6 +2,7 @@ package com.qingzhou.modules.openapi.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qingzhou.common.api.ResultCode;
 import com.qingzhou.common.crypto.AesEncryptor;
 import com.qingzhou.common.crypto.SignatureUtil;
 import com.qingzhou.common.exception.BizException;
@@ -39,7 +40,17 @@ public class OpenApiConsoleService {
 
     public OpenapiInvokePreviewVO preview(Long appId, OpenapiInvokeRequest request) {
         OpenapiApp app = requireApp(appId);
-        openapiAppService.assertGranted(appId, request.getWorkflowCode());
+        String type = request.resolvedType();
+        String code = request.resolvedCode();
+        if (!StringUtils.hasText(code)) {
+            throw new BizException(ResultCode.BAD_REQUEST, "资源编码不能为空");
+        }
+        if ("COMPONENT".equals(type)) {
+            openapiAppService.assertComponentGranted(appId, code);
+        } else {
+            openapiAppService.assertGranted(appId, code);
+        }
+
         String body = jsons.toJson(request.getInput() == null ? Map.of() : request.getInput());
         if (body == null) {
             body = "{}";
@@ -49,7 +60,9 @@ public class OpenApiConsoleService {
         String secret = aesEncryptor.decrypt(app.getAppSecretCipher());
         String signature = SignatureUtil.sign(body, timestamp, nonce, secret);
 
-        String path = "/openapi/v1/workflows/" + request.getWorkflowCode().trim() + "/execute";
+        String path = "COMPONENT".equals(type)
+                ? "/openapi/v1/components/" + code + "/execute"
+                : "/openapi/v1/workflows/" + code + "/execute";
         String url = baseUrl() + path;
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Content-Type", "application/json");
@@ -65,7 +78,7 @@ public class OpenApiConsoleService {
         vo.setHeaders(headers);
         vo.setBody(body);
         vo.setCurl(toCurl(url, headers, body));
-        vo.setTip("签名按原始 body 字节计算。json.dumps 默认带空格会导致签名不匹配，请用紧凑 JSON。");
+        vo.setTip("对外 body 为下方扁平 JSON。签名按原始 body 字节计算；请用紧凑 JSON。");
         return vo;
     }
 

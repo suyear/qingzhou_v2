@@ -24,6 +24,14 @@ export function bindOpenapiWorkflows(appId, workflowIds) {
   return http.put(`/api/openapi/apps/${appId}/workflows`, { workflowIds })
 }
 
+export function listGrantedComponents(appId) {
+  return http.get(`/api/openapi/apps/${appId}/components`)
+}
+
+export function bindOpenapiComponents(appId, componentIds) {
+  return http.put(`/api/openapi/apps/${appId}/components`, { componentIds })
+}
+
 export function previewOpenapiInvoke(appId, payload) {
   return http.post(`/api/openapi/apps/${appId}/invoke-preview`, payload)
 }

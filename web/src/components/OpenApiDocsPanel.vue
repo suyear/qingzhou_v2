@@ -1,36 +1,49 @@
 <template>
   <div class="openapi-docs">
     <div class="docs-hero">
-      <div class="docs-hero-title">外部系统如何调用你的工作流？</div>
-      <p class="docs-hero-desc">不会写签名也没关系：在「应用管理」打开<strong>调用助手</strong>，填入参后点「生成 curl」即可复制到终端。下方是给对接同学的完整签名说明。</p>
+      <div class="docs-hero-title">如何调用开放接口服务与组合接口服务？</div>
+      <p class="docs-hero-desc">
+        接口组件 = 接口服务；工作流编排 = 组合接口服务。授权给开放应用后，用同一套签名调用。
+        不会写签名也没关系：在「应用管理」打开<strong>调用助手</strong>，填入参后点「生成 curl」即可复制到终端。
+      </p>
     </div>
 
     <section class="doc-section">
       <h3>快速开始</h3>
       <ol class="steps">
-        <li>在工作流编排中<strong>发布</strong>工作流，记下 <code>workflowCode</code></li>
+        <li>准备可开放资源：启用<strong>接口组件</strong>，或发布<strong>工作流</strong>，分别记下 <code>componentCode</code> / <code>workflowCode</code></li>
         <li>在「应用管理」<strong>新建应用</strong>，保存 App Key 和 Secret（Secret 只显示一次）</li>
-        <li><strong>授权工作流</strong> → 打开「调用助手」填表单或 JSON，生成 curl 或走网关试调</li>
+        <li><strong>授权资源</strong>（接口服务和/或组合接口服务）→ 打开「调用助手」填扁平 JSON，生成 curl 或走网关试调</li>
         <li>正式对接时按下方签名规则在服务端计算 HMAC（不要把 Secret 放到浏览器）</li>
       </ol>
     </section>
 
     <section class="doc-section">
-      <h3>调用地址</h3>
-      <DetailCodeBlock title="接口" value="POST {baseUrl}/openapi/v1/workflows/{workflowCode}/execute" tone="ink" max-height="120px" />
-      <p class="tip">控制台「调用助手」生成的 curl 已包含正确地址和签名头。生产环境请在服务端配置 <code>qingzhou.openapi.public-base-url</code>。</p>
+      <h3>调用地址（双路径）</h3>
+      <DetailCodeBlock title="接口服务（组件）" :value="componentPath" tone="ink" max-height="80px" />
+      <DetailCodeBlock class="mt10" title="组合接口服务（工作流）" :value="workflowPath" tone="ink" max-height="80px" />
+      <p class="tip">
+        控制台「调用助手」生成的 curl 已包含正确地址和签名头。生产环境请在
+        <strong>系统设置 → 开放平台对外地址</strong> 配置（对应 <code>qingzhou.openapi.public-base-url</code>）。
+      </p>
     </section>
 
     <section class="doc-section">
       <h3>请求体</h3>
-      <p class="tip">Body 为工作流<strong>入参扁平 JSON</strong>（不是再包一层 <code>input</code>），与工作流设计器里定义的字段一致。</p>
-      <DetailCodeBlock title="示例" value='{"id":"10001","name":"demo"}' tone="ink" max-height="80px" />
+      <p class="tip">
+        Body 为资源<strong>入参扁平 JSON</strong>（不是再包一层 <code>input</code>），与组件 query/body schema 或工作流入参 schema 一致。
+        无 schema 时可先用下方 demo。
+      </p>
+      <DetailCodeBlock title="示例（与调用助手 / curl 同源）" :value="bodySample" tone="ink" max-height="80px" />
     </section>
 
     <section class="doc-section">
       <h3>成功响应</h3>
-      <p class="tip">与编排试跑、立即触发返回同一套精简结构：业务 <code>output</code> + 节点摘要 <code>steps</code>，不含完整 instance 实体。</p>
-      <DetailCodeBlock title="示例" :value="successSample" tone="ink" max-height="280px" />
+      <p class="tip">
+        对接方只需关心 <strong>入参</strong> 与业务 <strong>output</strong>。响应不含编排步骤；
+        组件调用与工作流共用同一响应结构。
+      </p>
+      <DetailCodeBlock title="示例" :value="successSampleText" tone="ink" max-height="280px" />
     </section>
 
     <section class="doc-section">
@@ -44,7 +57,7 @@
     <section class="doc-section">
       <h3>签名算法</h3>
       <DetailCodeBlock
-        title="算法"
+        title="算法（组件与工作流共用）"
         :value="signSample"
         copy-message="已复制签名算法"
         tone="ink"
@@ -59,6 +72,10 @@
 
     <section class="doc-section">
       <h3>代码示例</h3>
+      <el-radio-group v-model="samplePath" size="small" class="path-switch">
+        <el-radio-button value="workflow">组合接口服务</el-radio-button>
+        <el-radio-button value="component">接口服务</el-radio-button>
+      </el-radio-group>
       <el-tabs v-model="sampleTab" class="sample-tabs">
         <el-tab-pane label="curl" name="curl">
           <DetailCodeBlock title="curl" :value="curlSample" copy-message="已复制" tone="ink" max-height="280px" />
@@ -75,7 +92,7 @@
     <section class="doc-section">
       <h3>常见错误</h3>
       <el-table :data="errors" size="small" border class="doc-table">
-        <el-table-column prop="code" label="现象" width="160" />
+        <el-table-column prop="code" label="现象" width="180" />
         <el-table-column prop="fix" label="处理建议" />
       </el-table>
     </section>
@@ -83,10 +100,18 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import DetailCodeBlock from '@/components/detail/DetailCodeBlock.vue'
+import { OPENAPI_DEMO_INPUT, openapiSuccessSample } from '@/utils/openapiContract'
 
 const sampleTab = ref('curl')
+const samplePath = ref('workflow')
+
+const bodyCompact = JSON.stringify(OPENAPI_DEMO_INPUT)
+const bodySample = bodyCompact
+
+const componentPath = 'POST {baseUrl}/openapi/v1/components/{componentCode}/execute'
+const workflowPath = 'POST {baseUrl}/openapi/v1/workflows/{workflowCode}/execute'
 
 const headers = [
   { name: 'X-App-Key', desc: '应用 App Key，如 ak_xxxxxxxx' },
@@ -100,8 +125,8 @@ const errors = [
   { code: '签名不匹配', fix: '检查 body 是否为紧凑 JSON；Secret 是否正确；stringToSign 拼接顺序' },
   { code: '时间戳超出窗口', fix: '校准服务器时钟，timestamp 使用当前毫秒时间' },
   { code: 'Nonce 重复', fix: '每次请求生成新的 nonce' },
-  { code: '应用未授权该工作流', fix: '在应用管理中授权对应已发布工作流' },
-  { code: '工作流未发布', fix: '先在编排页发布工作流' },
+  { code: '应用未授权该资源', fix: '在应用管理中授权对应接口组件或已发布工作流' },
+  { code: '工作流未发布 / 组件未启用', fix: '先发布工作流，或将组件状态设为启用' },
   { code: 'IP 不在白名单', fix: '在应用设置中调整 IP 白名单或清空不限制' },
   { code: '超过 QPS 限制', fix: '调低调用频率或提高应用 QPS 上限' },
 ]
@@ -109,49 +134,33 @@ const errors = [
 const signSample = `stringToSign = MD5(body) + timestamp + nonce + secret
 signature    = Hex(HMAC-SHA256(key=secret, data=stringToSign)).toLowerCase()`
 
-const successSample = `{
-  "code": 0,
-  "message": "ok",
-  "data": {
-    "executionId": 12,
-    "executionNo": "E20260101120000xxxx",
-    "status": "SUCCESS",
-    "durationMs": 86,
-    "errorMsg": null,
-    "output": {
-      "node_query": { "rowCount": 1, "rows": [{ "id": 1, "name": "demo" }] }
-    },
-    "steps": [
-      {
-        "nodeId": "node_query",
-        "nodeName": "查询",
-        "status": "SUCCESS",
-        "durationMs": 40,
-        "response": { "rowCount": 1, "rows": [{ "id": 1, "name": "demo" }] }
-      }
-    ]
-  }
-}`
+const successSampleText = JSON.stringify(openapiSuccessSample(), null, 2)
 
-const curlSample = `curl -X POST 'https://your-host/openapi/v1/workflows/demo_flow/execute' \\
+const executeUrl = computed(() =>
+  samplePath.value === 'component'
+    ? 'https://your-host/openapi/v1/components/demo_api/execute'
+    : 'https://your-host/openapi/v1/workflows/demo_flow/execute',
+)
+
+const curlSample = computed(() => `curl -X POST '${executeUrl.value}' \\
   -H 'Content-Type: application/json' \\
   -H 'X-App-Key: ak_xxxxxxxx' \\
   -H 'X-Timestamp: 1710000000000' \\
   -H 'X-Nonce: abc123' \\
   -H 'X-Signature: <按算法计算>' \\
-  -d '{"orderId":"10001"}'`
+  -d '${bodyCompact}'`)
 
-const pythonSample = `import hashlib, hmac, json, time, uuid, requests
+const pythonSample = computed(() => `import hashlib, hmac, json, time, uuid, requests
 
 secret = "your-secret"
-body = json.dumps({"orderId": "10001"}, separators=(",", ":"))
+body = json.dumps(${JSON.stringify(OPENAPI_DEMO_INPUT)}, separators=(",", ":"))
 ts = str(int(time.time() * 1000))
 nonce = uuid.uuid4().hex
 md5 = hashlib.md5(body.encode()).hexdigest()
 sign = hmac.new(secret.encode(), f"{md5}{ts}{nonce}{secret}".encode(), hashlib.sha256).hexdigest()
 
 requests.post(
-    "https://your-host/openapi/v1/workflows/demo_flow/execute",
+    "${executeUrl.value}",
     data=body,
     headers={
         "Content-Type": "application/json",
@@ -160,18 +169,18 @@ requests.post(
         "X-Nonce": nonce,
         "X-Signature": sign,
     },
-)`
+)`)
 
-const nodeSample = `import crypto from 'crypto'
+const nodeSample = computed(() => `import crypto from 'crypto'
 
 const secret = 'your-secret'
-const body = JSON.stringify({ orderId: '10001' })
+const body = JSON.stringify(${JSON.stringify(OPENAPI_DEMO_INPUT)})
 const ts = String(Date.now())
 const nonce = crypto.randomBytes(8).toString('hex')
 const md5 = crypto.createHash('md5').update(body).digest('hex')
 const sign = crypto.createHmac('sha256', secret).update(md5 + ts + nonce + secret).digest('hex')
 
-await fetch('https://your-host/openapi/v1/workflows/demo_flow/execute', {
+await fetch('${executeUrl.value}', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -181,8 +190,7 @@ await fetch('https://your-host/openapi/v1/workflows/demo_flow/execute', {
     'X-Signature': sign,
   },
   body,
-})`
-
+})`)
 </script>
 
 <style scoped>
@@ -223,7 +231,9 @@ await fetch('https://your-host/openapi/v1/workflows/demo_flow/execute', {
   line-height: 1.5;
 }
 .doc-table { margin-top: 8px; }
+.path-switch { margin-bottom: 10px; }
 .sample-tabs :deep(.el-tabs__header) { margin-bottom: 10px; }
+.mt10 { margin-top: 10px; }
 code {
   padding: 1px 5px;
   border-radius: 4px;

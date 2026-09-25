@@ -1,7 +1,7 @@
 package com.qingzhou.modules.openapi.controller;
 
 import com.qingzhou.common.api.R;
-import com.qingzhou.modules.execution.dto.RunResultVO;
+import com.qingzhou.modules.execution.dto.OpenApiExecuteResultVO;
 import com.qingzhou.modules.execution.engine.WorkflowEngine;
 import com.qingzhou.modules.execution.support.ExecutionResultAssembler;
 import com.qingzhou.modules.openapi.entity.OpenapiApp;
@@ -27,19 +27,18 @@ public class OpenApiWorkflowController {
     private final ExecutionResultAssembler executionResultAssembler;
 
     /**
-     * 开放调用：body 为工作流入参扁平 JSON（与文档一致），如 {@code {"id":"1"}}。
-     * 兼容旧格式 {@code {"input":{...}}}。
-     * 返回与编排试跑一致的精简结果。
+     * 开放调用：body 为工作流入参扁平 JSON。
+     * 返回业务结果（input → output），不含编排步骤。
      */
     @PostMapping("/{code}/execute")
-    public R<RunResultVO> execute(
+    public R<OpenApiExecuteResultVO> execute(
             @PathVariable String code,
             @RequestBody(required = false) Map<String, Object> body,
             HttpServletRequest httpRequest) {
         OpenapiApp app = (OpenapiApp) httpRequest.getAttribute(OpenApiAuthenticator.ATTR_APP);
         Long appId = app == null ? null : app.getId();
         openapiAppService.assertGranted(appId, code);
-        return R.ok(executionResultAssembler.from(
+        return R.ok(executionResultAssembler.forOpenApi(
                 workflowEngine.runByCode(code, "OPENAPI", appId, unwrapInput(body))));
     }
 

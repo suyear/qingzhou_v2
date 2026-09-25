@@ -1,9 +1,10 @@
 package com.qingzhou.modules.openapi.service;
 
-import com.baomidou.mybatisplus.extension.service.IService;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.service.IService;
 import com.qingzhou.common.api.PageQuery;
 import com.qingzhou.modules.openapi.dto.OpenapiAppBindRequest;
+import com.qingzhou.modules.openapi.dto.OpenapiAppComponentBindRequest;
 import com.qingzhou.modules.openapi.dto.OpenapiAppCreateRequest;
 import com.qingzhou.modules.openapi.dto.OpenapiAppCreatedVO;
 import com.qingzhou.modules.openapi.dto.OpenapiAppListVO;
@@ -27,4 +28,10 @@ public interface OpenapiAppService extends IService<OpenapiApp> {
     void bindWorkflows(Long appId, OpenapiAppBindRequest request);
 
     void assertGranted(Long appId, String workflowCode);
+
+    List<Long> listGrantedComponentIds(Long appId);
+
+    void bindComponents(Long appId, OpenapiAppComponentBindRequest request);
+
+    void assertComponentGranted(Long appId, String componentCode);
 }

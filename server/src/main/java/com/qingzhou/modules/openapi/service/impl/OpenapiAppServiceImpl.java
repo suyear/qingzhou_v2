@@ -11,15 +11,20 @@ import com.qingzhou.common.crypto.SignatureUtil;
 import com.qingzhou.common.exception.BizException;
 import com.qingzhou.common.json.Jsons;
 import com.qingzhou.modules.audit.service.AuditLogService;
+import com.qingzhou.modules.component.entity.ApiComponent;
+import com.qingzhou.modules.component.service.ApiComponentService;
 import com.qingzhou.modules.openapi.dto.OpenapiAppBindRequest;
+import com.qingzhou.modules.openapi.dto.OpenapiAppComponentBindRequest;
 import com.qingzhou.modules.openapi.dto.OpenapiAppCreateRequest;
 import com.qingzhou.modules.openapi.dto.OpenapiAppCreatedVO;
 import com.qingzhou.modules.openapi.dto.OpenapiAppListVO;
 import com.qingzhou.modules.openapi.dto.OpenapiAppUpdateRequest;
-import com.qingzhou.modules.openapi.security.IpRules;
 import com.qingzhou.modules.openapi.entity.OpenapiApp;
+import com.qingzhou.modules.openapi.entity.OpenapiAppComponent;
 import com.qingzhou.modules.openapi.entity.OpenapiAppWorkflow;
 import com.qingzhou.modules.openapi.mapper.OpenapiAppMapper;
+import com.qingzhou.modules.openapi.security.IpRules;
+import com.qingzhou.modules.openapi.service.OpenapiAppComponentService;
 import com.qingzhou.modules.openapi.service.OpenapiAppService;
 import com.qingzhou.modules.openapi.service.OpenapiAppWorkflowService;
 import com.qingzhou.modules.workflow.entity.Workflow;
@@ -27,7 +32,6 @@ import com.qingzhou.modules.workflow.service.WorkflowService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import org.springframework.util.StringUtils;
 
 import java.util.HashSet;
@@ -42,7 +46,9 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
 
     private final AesEncryptor aesEncryptor;
     private final OpenapiAppWorkflowService openapiAppWorkflowService;
+    private final OpenapiAppComponentService openapiAppComponentService;
     private final WorkflowService workflowService;
+    private final ApiComponentService apiComponentService;
     private final Jsons jsons;
     private final AuditLogService auditLogService;
 
@@ -56,8 +62,12 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
         wrapper.orderByDesc(OpenapiApp::getUpdateTime);
         IPage<OpenapiApp> page = page(new Page<>(query.getCurrent(), query.getSize()), wrapper);
         List<Long> appIds = page.getRecords().stream().map(OpenapiApp::getId).toList();
-        Map<Long, Long> grantCounts = countGrants(appIds);
-        return page.convert(item -> toListVo(item, grantCounts.getOrDefault(item.getId(), 0L)));
+        Map<Long, Long> workflowGrants = countWorkflowGrants(appIds);
+        Map<Long, Long> componentGrants = countComponentGrants(appIds);
+        return page.convert(item -> toListVo(
+                item,
+                workflowGrants.getOrDefault(item.getId(), 0L),
+                componentGrants.getOrDefault(item.getId(), 0L)));
     }
 
     @Override
@@ -138,7 +148,7 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
                 throw new BizException(ResultCode.NOT_FOUND, "工作流不存在: " + workflowId);
             }
             if (!"PUBLISHED".equals(workflow.getStatus())) {
-                throw new BizException(ResultCode.BAD_REQUEST, "仅可授权已发布的工作流: " + workflow.getWorkflowName());
+                throw new BizException(ResultCode.BAD_REQUEST, "仅可授权已发布的组合接口服务: " + workflow.getWorkflowName());
             }
         }
         openapiAppWorkflowService.remove(new LambdaQueryWrapper<OpenapiAppWorkflow>()
@@ -160,17 +170,76 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
                 .eq(Workflow::getWorkflowCode, workflowCode)
                 .one();
         if (workflow == null) {
-            throw new BizException(ResultCode.NOT_FOUND, "工作流不存在: " + workflowCode);
+            throw new BizException(ResultCode.NOT_FOUND, "组合接口服务不存在: " + workflowCode);
         }
         if (!"PUBLISHED".equals(workflow.getStatus())) {
-            throw new BizException(ResultCode.BAD_REQUEST, "工作流未发布，无法通过 OpenAPI 执行");
+            throw new BizException(ResultCode.BAD_REQUEST, "组合接口服务未发布，无法通过 OpenAPI 执行");
         }
         boolean granted = openapiAppWorkflowService.lambdaQuery()
                 .eq(OpenapiAppWorkflow::getAppId, appId)
                 .eq(OpenapiAppWorkflow::getWorkflowId, workflow.getId())
                 .exists();
         if (!granted) {
-            throw new BizException(ResultCode.FORBIDDEN, "应用未授权该工作流");
+            throw new BizException(ResultCode.FORBIDDEN, "应用未授权该组合接口服务");
+        }
+    }
+
+    @Override
+    public List<Long> listGrantedComponentIds(Long appId) {
+        requireApp(appId);
+        return openapiAppComponentService.lambdaQuery()
+                .eq(OpenapiAppComponent::getAppId, appId)
+                .list()
+                .stream()
+                .map(OpenapiAppComponent::getComponentId)
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public void bindComponents(Long appId, OpenapiAppComponentBindRequest request) {
+        requireApp(appId);
+        List<Long> ids = request.getComponentIds() == null ? List.of() : request.getComponentIds();
+        Set<Long> target = new HashSet<>(ids);
+        for (Long componentId : target) {
+            ApiComponent component = apiComponentService.getById(componentId);
+            if (component == null) {
+                throw new BizException(ResultCode.NOT_FOUND, "接口服务不存在: " + componentId);
+            }
+            if (!Integer.valueOf(1).equals(component.getStatus())) {
+                throw new BizException(ResultCode.BAD_REQUEST, "仅可授权已启用的接口服务: " + component.getComponentName());
+            }
+        }
+        openapiAppComponentService.remove(new LambdaQueryWrapper<OpenapiAppComponent>()
+                .eq(OpenapiAppComponent::getAppId, appId));
+        for (Long componentId : target) {
+            OpenapiAppComponent bind = new OpenapiAppComponent();
+            bind.setAppId(appId);
+            bind.setComponentId(componentId);
+            openapiAppComponentService.save(bind);
+        }
+    }
+
+    @Override
+    public void assertComponentGranted(Long appId, String componentCode) {
+        if (appId == null) {
+            throw new BizException(ResultCode.UNAUTHORIZED, "缺少调用方应用");
+        }
+        ApiComponent component = apiComponentService.lambdaQuery()
+                .eq(ApiComponent::getComponentCode, componentCode)
+                .one();
+        if (component == null) {
+            throw new BizException(ResultCode.NOT_FOUND, "接口服务不存在: " + componentCode);
+        }
+        if (!Integer.valueOf(1).equals(component.getStatus())) {
+            throw new BizException(ResultCode.BAD_REQUEST, "接口服务已停用，无法通过 OpenAPI 执行");
+        }
+        boolean granted = openapiAppComponentService.lambdaQuery()
+                .eq(OpenapiAppComponent::getAppId, appId)
+                .eq(OpenapiAppComponent::getComponentId, component.getId())
+                .exists();
+        if (!granted) {
+            throw new BizException(ResultCode.FORBIDDEN, "应用未授权该接口服务");
         }
     }
 
@@ -194,7 +263,7 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
         return rules.isEmpty() ? null : jsons.toJson(rules);
     }
 
-    private Map<Long, Long> countGrants(List<Long> appIds) {
+    private Map<Long, Long> countWorkflowGrants(List<Long> appIds) {
         if (appIds == null || appIds.isEmpty()) {
             return Map.of();
         }
@@ -205,7 +274,18 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
                 .collect(Collectors.groupingBy(OpenapiAppWorkflow::getAppId, Collectors.counting()));
     }
 
-    private OpenapiAppListVO toListVo(OpenapiApp app, long grantedCount) {
+    private Map<Long, Long> countComponentGrants(List<Long> appIds) {
+        if (appIds == null || appIds.isEmpty()) {
+            return Map.of();
+        }
+        return openapiAppComponentService.lambdaQuery()
+                .in(OpenapiAppComponent::getAppId, appIds)
+                .list()
+                .stream()
+                .collect(Collectors.groupingBy(OpenapiAppComponent::getAppId, Collectors.counting()));
+    }
+
+    private OpenapiAppListVO toListVo(OpenapiApp app, long workflowCount, long componentCount) {
         OpenapiAppListVO vo = new OpenapiAppListVO();
         vo.setId(app.getId());
         vo.setAppName(app.getAppName());
@@ -218,7 +298,9 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
         vo.setExpireTime(app.getExpireTime());
         vo.setCreateTime(app.getCreateTime());
         vo.setUpdateTime(app.getUpdateTime());
-        vo.setGrantedCount((int) grantedCount);
+        vo.setGrantedWorkflowCount((int) workflowCount);
+        vo.setGrantedComponentCount((int) componentCount);
+        vo.setGrantedCount((int) (workflowCount + componentCount));
         return vo;
     }
 }

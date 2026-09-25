@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.qingzhou.common.api.PageQuery;
 import com.qingzhou.common.api.R;
 import com.qingzhou.modules.openapi.dto.OpenapiAppBindRequest;
+import com.qingzhou.modules.openapi.dto.OpenapiAppComponentBindRequest;
 import com.qingzhou.modules.openapi.dto.OpenapiAppCreateRequest;
 import com.qingzhou.modules.openapi.dto.OpenapiAppCreatedVO;
 import com.qingzhou.modules.openapi.dto.OpenapiAppListVO;
@@ -55,23 +56,34 @@ public class OpenapiAppController {
     }
 
     @GetMapping("/{id}/workflows")
-    public R<List<Long>> granted(@PathVariable Long id) {
+    public R<List<Long>> grantedWorkflows(@PathVariable Long id) {
         return R.ok(openapiAppService.listGrantedWorkflowIds(id));
     }
 
     @PutMapping("/{id}/workflows")
-    public R<Void> bind(@PathVariable Long id, @Valid @RequestBody OpenapiAppBindRequest request) {
+    public R<Void> bindWorkflows(@PathVariable Long id, @Valid @RequestBody OpenapiAppBindRequest request) {
         openapiAppService.bindWorkflows(id, request);
         return R.ok();
     }
 
+    @GetMapping("/{id}/components")
+    public R<List<Long>> grantedComponents(@PathVariable Long id) {
+        return R.ok(openapiAppService.listGrantedComponentIds(id));
+    }
+
+    @PutMapping("/{id}/components")
+    public R<Void> bindComponents(@PathVariable Long id, @Valid @RequestBody OpenapiAppComponentBindRequest request) {
+        openapiAppService.bindComponents(id, request);
+        return R.ok();
+    }
+
     @PostMapping("/{id}/invoke-preview")
-    public R<OpenapiInvokePreviewVO> invokePreview(@PathVariable Long id, @Valid @RequestBody OpenapiInvokeRequest request) {
+    public R<OpenapiInvokePreviewVO> invokePreview(@PathVariable Long id, @RequestBody OpenapiInvokeRequest request) {
         return R.ok(openApiConsoleService.preview(id, request));
     }
 
     @PostMapping("/{id}/invoke")
-    public R<OpenapiInvokeResultVO> invoke(@PathVariable Long id, @Valid @RequestBody OpenapiInvokeRequest request) {
+    public R<OpenapiInvokeResultVO> invoke(@PathVariable Long id, @RequestBody OpenapiInvokeRequest request) {
         return R.ok(openApiConsoleService.invoke(id, request));
     }
 }
