@@ -17,6 +17,7 @@ import com.qingzhou.modules.execution.entity.ExecutionInstance;
 import com.qingzhou.modules.execution.entity.ExecutionNodeLog;
 import com.qingzhou.modules.execution.service.ExecutionInstanceService;
 import com.qingzhou.modules.execution.service.ExecutionNodeLogService;
+import com.qingzhou.modules.execution.support.FailureCategory;
 import com.qingzhou.modules.workflow.dto.DagGraph;
 import com.qingzhou.modules.workflow.dto.DagNode;
 import com.qingzhou.modules.workflow.dto.ParamMappingItem;
@@ -159,8 +160,14 @@ public class WorkflowEngine {
         instance.setEndTime(ended);
         instance.setDurationMs(java.time.Duration.between(started, ended).toMillis());
         if (failed.get()) {
-            instance.setStatus("FAILED");
-            instance.setErrorMsg(failMsg.get());
+            String msg = failMsg.get();
+            boolean timedOut = FailureCategory.looksLikeTimeout(msg)
+                    || executionNodeLogService.lambdaQuery()
+                    .eq(ExecutionNodeLog::getExecutionId, instance.getId())
+                    .eq(ExecutionNodeLog::getStatus, "TIMEOUT")
+                    .exists();
+            instance.setStatus(timedOut ? "TIMEOUT" : "FAILED");
+            instance.setErrorMsg(msg);
         } else {
             instance.setStatus("SUCCESS");
             instance.setOutputResult(jsons.toJson(outputs));

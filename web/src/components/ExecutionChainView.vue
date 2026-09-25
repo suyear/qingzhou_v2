@@ -3,12 +3,22 @@
     <div class="chain-head">
       <div class="chain-status">
         <StatusTag kind="exec" :value="instance.status" />
+        <StatusTag
+          v-if="failureCategory"
+          :type="failureTagType"
+          :label="failureCategoryLabel"
+        />
         <span class="exec-no">
           单号
           <el-button type="primary" link @click="copy(instance.executionNo, '已复制单号')">{{ instance.executionNo }}</el-button>
         </span>
+        <span v-if="workflowCode" class="exec-no mono">
+          编码
+          <el-button type="primary" link @click="copy(workflowCode, '已复制编码')">{{ workflowCode }}</el-button>
+        </span>
       </div>
       <div class="chain-actions">
+        <el-button type="primary" link @click="copyDeepLink">复制排查链接</el-button>
         <el-button type="primary" link @click="$router.push({ path: '/executions', query: { keyword: instance.executionNo } })">
           运行结果
         </el-button>
@@ -111,6 +121,17 @@ const logView = ref(null)
 const instance = computed(() => props.chain?.instance || {})
 const trigger = computed(() => props.chain?.trigger || {})
 const failedNode = computed(() => (props.chain?.logs || []).find((item) => item.nodeId === props.chain?.failedNodeId))
+const workflowCode = computed(() => props.chain?.workflow?.code || '')
+
+const failureMeta = computed(() => classifyFailure(instance.value.status, instance.value.errorMsg))
+const failureCategory = computed(() => failureMeta.value?.category || '')
+const failureCategoryLabel = computed(() => failureMeta.value?.label || '')
+const failureTagType = computed(() => {
+  const cat = failureCategory.value
+  if (cat === 'TIMEOUT' || cat === 'UPSTREAM') return 'warning'
+  if (cat === 'AUTH' || cat === 'PARAM') return 'danger'
+  return 'info'
+})
 
 const triggerTitle = computed(() => trigger.value.name || triggerLabel(instance.value.triggerType))
 const triggerHint = computed(() => {
@@ -184,6 +205,35 @@ async function copy(text, message) {
   await copyText(text)
   ElMessage.success(message)
 }
+
+async function copyDeepLink() {
+  const id = instance.value.id
+  if (!id) return
+  const url = `${window.location.origin}/executions?id=${id}`
+  await copyText(url)
+  ElMessage.success('已复制排查链接')
+}
+
+function classifyFailure(status, errorMsg) {
+  if (status === 'SUCCESS' || status === 'RUNNING' || status === 'PENDING') return null
+  if (status === 'TIMEOUT') return { category: 'TIMEOUT', label: '超时' }
+  const msg = String(errorMsg || '').toLowerCase()
+  const raw = String(errorMsg || '')
+  if (msg.includes('timeout') || raw.includes('超时') || msg.includes('504')) {
+    return { category: 'TIMEOUT', label: '超时' }
+  }
+  if (['签名', 'unauthorized', '401', '403', '鉴权', 'token', 'secret', '白名单', '未授权', 'forbidden'].some((k) => msg.includes(k) || raw.includes(k))) {
+    return { category: 'AUTH', label: '鉴权' }
+  }
+  if (['缺少', '必填', '入参', '参数', 'bad request', '400', '校验', '不能为空'].some((k) => msg.includes(k) || raw.includes(k))) {
+    return { category: 'PARAM', label: '入参' }
+  }
+  if (['连接', '网络', '502', '503', '5xx', '第三方', 'http ', 'econn', 'refused'].some((k) => msg.includes(k) || raw.includes(k))) {
+    return { category: 'UPSTREAM', label: '上游' }
+  }
+  if (!raw.trim()) return { category: 'UNKNOWN', label: '未知' }
+  return { category: 'BUSINESS', label: '业务' }
+}
 </script>
 
 <style scoped>
@@ -203,6 +253,10 @@ async function copy(text, message) {
 }
 .exec-no {
   font-size: 13px;
+}
+.mono {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
 }
 .chain-steps {
   display: grid;

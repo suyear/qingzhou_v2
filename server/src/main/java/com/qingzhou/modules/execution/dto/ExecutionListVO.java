@@ -16,8 +16,13 @@ public class ExecutionListVO {
     private Long snapshotId;
     private String triggerType;
     private Long triggerAppId;
+    /** 触发来源可读名：开放应用名 / 调度任务名等 */
+    private String triggerSourceLabel;
     private String status;
     private String errorMsg;
+    /** TIMEOUT / AUTH / PARAM / UPSTREAM / BUSINESS / UNKNOWN */
+    private String failureCategory;
+    private String failureCategoryLabel;
     private String traceId;
     private LocalDateTime startTime;
     private LocalDateTime endTime;

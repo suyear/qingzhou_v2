@@ -31,6 +31,7 @@
         </el-form-item>
         <el-form-item label="执行日志保留天数">
           <el-input-number v-model="form.executionRetentionDays" :min="7" :max="3650" />
+          <p class="form-hint">每天 03:30 自动清理超过保留天数的执行实例与节点日志。</p>
         </el-form-item>
         <el-form-item label="时区">
           <el-input v-model="form.timezone" placeholder="Asia/Shanghai" />
@@ -101,6 +102,12 @@ onMounted(load)
 
 <style scoped>
 .form-panel { padding: 16px 18px 20px; margin-bottom: 12px; }
+.form-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--qz-text-muted);
+  line-height: 1.4;
+}
 .stat-card.clickable {
   cursor: pointer;
   text-align: left;
