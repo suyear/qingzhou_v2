@@ -13,7 +13,21 @@
       <el-button type="primary" @click="openCreate">新建凭证</el-button>
     </PageHeader>
     <PageState :error="loadError" @retry="load" />
-    <el-alert class="mode-alert" type="info" :closable="true" show-icon>
+    <div v-if="!showGuide && moduleStats" class="stat-grid cols-3">
+      <div class="stat-card">
+        <div class="stat-label">全部凭证</div>
+        <div class="stat-num">{{ moduleStats.total ?? 0 }}</div>
+      </div>
+      <div class="stat-card stat-ok">
+        <div class="stat-label">已启用</div>
+        <div class="stat-num">{{ moduleStats.enabled ?? 0 }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">类型分布</div>
+        <div class="stat-hint">{{ typeDistText }}</div>
+      </div>
+    </div>
+    <el-alert v-if="showGuide" class="mode-alert" type="info" :closable="true" show-icon @close="showGuide = false">
       <template #title>怎么选？</template>
       <div class="cred-guide">
         <span><strong>企业微信</strong>：填企业 ID 和密钥，可测连通。</span>
@@ -343,6 +357,7 @@ import AuthTypePicker from '@/components/AuthTypePicker.vue'
 import { askConfirm } from '@/utils/confirm'
 import { pageWorkflows } from '@/api/workflow'
 import { networkErrorMessage } from '@/api/http'
+import { getModuleStats } from '@/api/dashboard'
 import {
   CREDENTIAL_TYPES,
   DB_TYPES_COMMON,
@@ -377,6 +392,8 @@ const current = ref(1)
 const size = ref(10)
 const loading = ref(false)
 const loadError = ref('')
+const showGuide = ref(true)
+const moduleStats = ref(null)
 const testVisible = ref(false)
 const testResult = ref(null)
 const workflows = ref([])
@@ -386,6 +403,12 @@ const workflowMap = computed(() => {
     map[Number(item.id)] = item
   }
   return map
+})
+
+const typeDistText = computed(() => {
+  const byType = moduleStats.value?.byType || {}
+  const parts = Object.entries(byType).map(([k, v]) => `${credentialTypeLabel(k)} ${v}`)
+  return parts.length ? parts.join(' · ') : '暂无'
 })
 
 function workflowTitle(id) {
@@ -446,9 +469,13 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await pageCredentials({ current: current.value, size: size.value, keyword: keyword.value })
+    const [res, statsRes] = await Promise.all([
+      pageCredentials({ current: current.value, size: size.value, keyword: keyword.value }),
+      getModuleStats().catch(() => null),
+    ])
     records.value = res.data?.records || []
     total.value = Number(res.data?.total || 0)
+    moduleStats.value = statsRes?.data?.credentials || null
   } catch (error) {
     loadError.value = networkErrorMessage(error)
     records.value = []

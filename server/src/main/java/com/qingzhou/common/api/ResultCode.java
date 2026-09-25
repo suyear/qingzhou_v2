@@ -9,7 +9,7 @@ public enum ResultCode {
 
     SUCCESS(0, "ok"),
     BAD_REQUEST(400, "请求参数错误"),
-    UNAUTHORIZED(401, "签名校验失败"),
+    UNAUTHORIZED(401, "未登录或登录已失效"),
     FORBIDDEN(403, "无权限"),
     NOT_FOUND(404, "资源不存在"),
     CONFLICT(409, "资源冲突"),

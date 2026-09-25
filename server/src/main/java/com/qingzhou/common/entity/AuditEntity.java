@@ -1,5 +1,7 @@
 package com.qingzhou.common.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -8,8 +10,10 @@ import lombok.EqualsAndHashCode;
 @EqualsAndHashCode(callSuper = true)
 public abstract class AuditEntity extends BaseEntity {
 
+    @TableField(fill = FieldFill.INSERT)
     private String createBy;
 
+    @TableField(fill = FieldFill.INSERT_UPDATE)
     private String updateBy;
 
     /** 仅标注在有 deleted 列的表上；不要配成 MP 全局字段，否则无该列的表会拼错误 SQL */

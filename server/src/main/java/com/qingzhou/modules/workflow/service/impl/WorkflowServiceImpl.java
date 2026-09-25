@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qingzhou.common.api.ResultCode;
 import com.qingzhou.common.exception.BizException;
 import com.qingzhou.common.json.Jsons;
+import com.qingzhou.modules.audit.service.AuditLogService;
 import com.qingzhou.modules.workflow.dto.DagGraph;
 import com.qingzhou.modules.workflow.dto.ParamMappingItem;
 import com.qingzhou.modules.workflow.dto.WorkflowSaveRequest;
@@ -38,6 +39,7 @@ public class WorkflowServiceImpl extends ServiceImpl<WorkflowMapper, Workflow> i
     private final Jsons jsons;
     private final ObjectMapper objectMapper;
     private final WorkflowSnapshotService workflowSnapshotService;
+    private final AuditLogService auditLogService;
 
     @Override
     @Transactional
@@ -118,6 +120,8 @@ public class WorkflowServiceImpl extends ServiceImpl<WorkflowMapper, Workflow> i
         entity.setStatus(STATUS_PUBLISHED);
         entity.setPublishTime(now);
         updateById(entity);
+        auditLogService.recordCurrent("WORKFLOW_PUBLISH", "WORKFLOW", String.valueOf(id),
+                "SUCCESS", "发布工作流 " + entity.getWorkflowName() + " v" + version);
         return detail(id);
     }
 
@@ -130,6 +134,8 @@ public class WorkflowServiceImpl extends ServiceImpl<WorkflowMapper, Workflow> i
         }
         entity.setStatus(STATUS_DISABLED);
         updateById(entity);
+        auditLogService.recordCurrent("WORKFLOW_DISABLE", "WORKFLOW", String.valueOf(id),
+                "SUCCESS", "停用工作流 " + entity.getWorkflowName());
         return detail(id);
     }
 

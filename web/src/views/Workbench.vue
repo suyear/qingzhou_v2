@@ -36,6 +36,19 @@
       </button>
     </div>
 
+    <el-alert
+      v-if="actionItems?.recentFailures > 0 || actionItems?.licenseExpiringSoon"
+      class="guide-alert"
+      type="warning"
+      show-icon
+      :closable="false"
+      :title="actionTitle"
+      :description="actionDesc"
+    >
+      <el-button v-if="actionItems?.recentFailures > 0" type="primary" size="small" @click="$router.push('/executions?filter=problem')">查看失败</el-button>
+      <el-button v-if="actionItems?.licenseExpiringSoon" size="small" @click="$router.push('/settings')">License</el-button>
+    </el-alert>
+
     <!-- 空态：三步旅程 -->
     <div v-if="!loading && !loadError && isEmptyJourney" class="journey-grid">
       <button type="button" class="journey-card" @click="$router.push('/components')">
@@ -60,8 +73,8 @@
       <div class="next-section">
         <h3 class="section-title">下一步</h3>
         <div class="next-actions">
-          <el-button type="primary" @click="$router.push('/components')">接入组件</el-button>
-          <el-button @click="$router.push('/designer')">新建编排</el-button>
+          <el-button v-if="auth.canWrite.value" type="primary" @click="$router.push('/components')">接入组件</el-button>
+          <el-button v-if="auth.canWrite.value" @click="$router.push('/designer')">新建编排</el-button>
           <el-button @click="$router.push('/schedules')">定时调度</el-button>
           <el-button @click="$router.push('/openapi')">开放平台</el-button>
           <el-button v-if="summary.rangeFailed > 0" type="warning" plain @click="$router.push('/executions?filter=problem')">
@@ -276,7 +289,7 @@ import PageState from '@/components/PageState.vue'
 import ChartPanel from '@/components/ChartPanel.vue'
 import StatusTag from '@/components/StatusTag.vue'
 import ExecutionChainDrawer from '@/components/ExecutionChainDrawer.vue'
-import { getDashboardOverview } from '@/api/dashboard'
+import { getDashboardOverview, getModuleStats } from '@/api/dashboard'
 import { pageExecutions } from '@/api/execution'
 import { networkErrorMessage } from '@/api/http'
 import { durationText } from '@/utils/format'
@@ -291,7 +304,9 @@ import {
   sharePieOption,
   trendOption,
 } from '@/utils/charts'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
 const days = ref(7)
 const loading = ref(false)
 const chartLoading = ref(false)
@@ -300,8 +315,20 @@ const chartError = ref('')
 const recent = ref([])
 const failures = ref([])
 const overview = ref(null)
+const actionItems = ref(null)
 const chainDrawer = ref(null)
 const chartsExpanded = ref(false)
+
+const actionTitle = computed(() => {
+  if (actionItems.value?.licenseExpiringSoon) return 'License 即将到期'
+  return `近 7 日有 ${actionItems.value?.recentFailures || 0} 次失败待处理`
+})
+const actionDesc = computed(() => {
+  if (actionItems.value?.licenseExpiringSoon) {
+    return actionItems.value.licenseMessage || '请尽快更新 License'
+  }
+  return '打开运行结果里的「失败与超时」排查。'
+})
 
 const summary = computed(() => overview.value?.summary || {
   components: null,
@@ -397,7 +424,12 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    await Promise.all([loadDashboard(), loadRecent()])
+    const [, , statsRes] = await Promise.all([
+      loadDashboard(),
+      loadRecent(),
+      getModuleStats().catch(() => null),
+    ])
+    actionItems.value = statsRes?.data?.actionItems || null
     if (chartError.value) {
       loadError.value = chartError.value
     }

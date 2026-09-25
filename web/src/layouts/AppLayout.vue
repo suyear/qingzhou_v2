@@ -3,6 +3,22 @@
     <el-header class="qz-header" height="56px">
       <div class="qz-brand">轻舟<small>低代码集成调度中台</small></div>
       <div class="qz-header-page">{{ currentTitle }}</div>
+      <div class="qz-header-user">
+        <el-dropdown trigger="click" @command="onUserCommand">
+          <span class="user-trigger">
+            {{ auth.user.value?.displayName || auth.user.value?.username || '用户' }}
+            <el-icon><ArrowDown /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item disabled>{{ roleText }}</el-dropdown-item>
+              <el-dropdown-item command="password">修改密码</el-dropdown-item>
+              <el-dropdown-item v-if="auth.isAdmin.value" command="settings">系统设置</el-dropdown-item>
+              <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
     </el-header>
     <el-container class="qz-body">
       <el-aside v-if="!route.meta.full" class="qz-aside" width="216px">
@@ -27,7 +43,7 @@
             <el-icon><Share /></el-icon>
             <span>工作流编排</span>
           </el-menu-item>
-          <el-menu-item index="/credentials">
+          <el-menu-item v-if="auth.canWrite.value" index="/credentials">
             <el-icon><Key /></el-icon>
             <span>凭证管理</span>
           </el-menu-item>
@@ -45,6 +61,21 @@
             <el-icon><Connection /></el-icon>
             <span>开放平台</span>
           </el-menu-item>
+          <template v-if="auth.isAdmin.value">
+            <div class="nav-group">系统</div>
+            <el-menu-item index="/users">
+              <el-icon><User /></el-icon>
+              <span>用户管理</span>
+            </el-menu-item>
+            <el-menu-item index="/audit">
+              <el-icon><Document /></el-icon>
+              <span>审计日志</span>
+            </el-menu-item>
+            <el-menu-item index="/settings">
+              <el-icon><Setting /></el-icon>
+              <span>系统设置</span>
+            </el-menu-item>
+          </template>
         </el-menu>
       </el-aside>
       <el-main :class="route.meta.full ? 'qz-main-full' : 'qz-main'">
@@ -60,14 +91,44 @@
         <router-view />
       </el-main>
     </el-container>
+
+    <el-dialog v-model="pwdVisible" title="修改密码" width="420px">
+      <el-form label-position="top">
+        <el-form-item label="当前密码">
+          <el-input v-model="pwdForm.oldPassword" type="password" show-password />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="pwdForm.newPassword" type="password" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pwdVisible = false">取消</el-button>
+        <el-button type="primary" :loading="pwdSaving" @click="onChangePassword">保存</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
-import { Connection, Grid, HomeFilled, Key, List, Share, Timer } from '@element-plus/icons-vue'
+import { computed, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import {
+  ArrowDown,
+  Connection,
+  Document,
+  Grid,
+  HomeFilled,
+  Key,
+  List,
+  Setting,
+  Share,
+  Timer,
+  User,
+} from '@element-plus/icons-vue'
 import { backendUnreachable } from '@/api/http'
+import { changePassword, logout } from '@/api/auth'
+import { useAuthStore } from '@/stores/auth'
 
 const TITLES = {
   '/': '工作台',
@@ -77,9 +138,17 @@ const TITLES = {
   '/credentials': '凭证管理',
   '/executions': '运行结果',
   '/openapi': '开放平台',
+  '/users': '用户管理',
+  '/audit': '审计日志',
+  '/settings': '系统设置',
 }
 
 const route = useRoute()
+const router = useRouter()
+const auth = useAuthStore()
+const pwdVisible = ref(false)
+const pwdSaving = ref(false)
+const pwdForm = reactive({ oldPassword: '', newPassword: '' })
 
 const currentTitle = computed(() => {
   if (route.path.startsWith('/designer')) {
@@ -94,46 +163,90 @@ const activeMenu = computed(() => {
   }
   return route.path
 })
+
+const roleText = computed(() => {
+  const map = { ADMIN: '管理员', DEVELOPER: '开发者', VIEWER: '只读运维' }
+  return (auth.roles.value || []).map((r) => map[r] || r).join('、') || '未分配角色'
+})
+
+async function onUserCommand(cmd) {
+  if (cmd === 'logout') {
+    try {
+      await logout()
+    } catch {
+      /* ignore */
+    }
+    auth.clearSession()
+    await router.replace('/login')
+    return
+  }
+  if (cmd === 'settings') {
+    await router.push('/settings')
+    return
+  }
+  if (cmd === 'password') {
+    pwdForm.oldPassword = ''
+    pwdForm.newPassword = ''
+    pwdVisible.value = true
+  }
+}
+
+async function onChangePassword() {
+  pwdSaving.value = true
+  try {
+    await changePassword(pwdForm)
+    ElMessage.success('密码已更新')
+    pwdVisible.value = false
+  } finally {
+    pwdSaving.value = false
+  }
+}
 </script>
 
 <style scoped>
 .el-header {
-  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.qz-header-page {
+  flex: 1;
+  font-size: 14px;
+  color: #64748b;
+}
+.qz-header-user {
+  margin-left: auto;
+}
+.user-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: #334155;
+  font-size: 13px;
+}
+.nav-group {
+  padding: 14px 20px 6px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  text-transform: uppercase;
 }
 .qz-menu {
   border-right: none;
-  padding: 10px 10px 16px;
 }
 .qz-menu :deep(.el-menu-item) {
-  height: 40px;
-  line-height: 40px;
-  margin: 2px 0;
+  height: 42px;
+  margin: 2px 8px;
   border-radius: 8px;
 }
 .qz-menu :deep(.el-menu-item:hover) {
-  background: var(--qz-aside-hover) !important;
-  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.12) !important;
 }
 .qz-menu :deep(.el-menu-item.is-active) {
-  background: var(--qz-aside-active) !important;
-  color: #fff;
-  font-weight: 600;
-}
-.qz-main-full {
-  padding: 0;
-  overflow: hidden;
-}
-.qz-body {
-  flex: 1;
-  min-height: 0;
+  background: #2563eb !important;
 }
 .backend-alert {
-  margin-bottom: 14px;
-}
-.nav-group {
-  padding: 16px 12px 6px;
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  color: #64748b;
+  margin-bottom: 12px;
 }
 </style>

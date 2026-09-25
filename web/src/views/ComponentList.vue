@@ -42,6 +42,20 @@
     </PageHeader>
 
     <PageState :error="loadError" @retry="load" />
+    <div v-if="!showGuide && componentStats" class="stat-grid cols-3">
+      <div class="stat-card">
+        <div class="stat-label">全部组件</div>
+        <div class="stat-num">{{ componentStats.total ?? 0 }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">HTTP</div>
+        <div class="stat-num">{{ componentStats.httpCount ?? 0 }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">数据库</div>
+        <div class="stat-num">{{ componentStats.databaseCount ?? 0 }}</div>
+      </div>
+    </div>
     <el-alert
       v-if="showGuide"
       class="guide-alert"
@@ -404,6 +418,7 @@ import { askConfirm } from '@/utils/confirm'
 import { copyText } from '@/utils/format'
 import { createComponent, deleteComponent, pageComponents, testComponent, updateComponent } from '@/api/component'
 import { pageCredentials } from '@/api/credential'
+import { getModuleStats } from '@/api/dashboard'
 import { networkErrorMessage } from '@/api/http'
 import {
   CATEGORY_LABEL,
@@ -467,6 +482,7 @@ const testResult = ref(null)
 const credentials = ref([])
 const GUIDE_KEY = 'qz-component-guide-dismissed'
 const showGuide = ref(localStorage.getItem(GUIDE_KEY) !== '1')
+const componentStats = ref(null)
 
 const form = reactive({
   id: null,
@@ -588,16 +604,20 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await pageComponents({
-      current: current.value,
-      size: size.value,
-      keyword: keyword.value,
-      category: category.value || undefined,
-      isPreset: presetFilter.value === '' ? undefined : Number(presetFilter.value),
-      httpMethod: httpMethod.value || undefined,
-    })
+    const [res, statsRes] = await Promise.all([
+      pageComponents({
+        current: current.value,
+        size: size.value,
+        keyword: keyword.value,
+        category: category.value || undefined,
+        isPreset: presetFilter.value === '' ? undefined : Number(presetFilter.value),
+        httpMethod: httpMethod.value || undefined,
+      }),
+      getModuleStats().catch(() => null),
+    ])
     records.value = res.data?.records || []
     total.value = Number(res.data?.total || 0)
+    componentStats.value = statsRes?.data?.components || null
   } catch (error) {
     loadError.value = networkErrorMessage(error)
     records.value = []

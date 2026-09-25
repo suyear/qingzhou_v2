@@ -68,7 +68,7 @@
         <div class="stat-card stat-ok">
           <div class="stat-label">可对外调用</div>
           <div class="stat-num">{{ stats.ready }}</div>
-          <div class="stat-hint">已启用且已授权工作流</div>
+          <div class="stat-hint">近 7 日调用 {{ openapiExtra.invoke7d ?? 0 }} · 失败 {{ openapiExtra.fail7d ?? 0 }}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">已发布工作流</div>
@@ -446,6 +446,7 @@ import { copyText, formatTime } from '@/utils/format'
 import { annotateCurlWithFields, examplePayloadFromSchema, schemaFieldGuide } from '@/utils/triggerInput'
 import { pageWorkflows } from '@/api/workflow'
 import { networkErrorMessage } from '@/api/http'
+import { getModuleStats } from '@/api/dashboard'
 import {
   bindOpenapiWorkflows,
   createOpenapiApp,
@@ -502,6 +503,7 @@ const stats = computed(() => ({
   ready: records.value.filter((item) => item.status === 1 && item.grantedCount > 0).length,
   published: publishedWorkflows.value.length,
 }))
+const openapiExtra = ref({ invoke7d: 0, fail7d: 0 })
 
 const firstReadyApp = computed(() =>
   records.value.find((item) => item.status === 1 && item.grantedCount > 0),
@@ -578,8 +580,17 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await pageOpenapiApps({ current: 1, size: 50, keyword: keyword.value })
+    const [res, statsRes] = await Promise.all([
+      pageOpenapiApps({ current: 1, size: 50, keyword: keyword.value }),
+      getModuleStats().catch(() => null),
+    ])
     records.value = res.data?.records || []
+    if (statsRes?.data?.openapi) {
+      openapiExtra.value = {
+        invoke7d: statsRes.data.openapi.invoke7d || 0,
+        fail7d: statsRes.data.openapi.fail7d || 0,
+      }
+    }
   } catch (error) {
     loadError.value = networkErrorMessage(error)
     records.value = []

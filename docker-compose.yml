@@ -1,0 +1,79 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: qingzhou-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-qingzhou_root}
+      MYSQL_DATABASE: ${DB_NAME:-qingzhou}
+      TZ: Asia/Shanghai
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - qz_mysql_data:/var/lib/mysql
+      - ./sql/V1__init_schema.sql:/docker-entrypoint-initdb.d/01_V1.sql:ro
+      - ./sql/V2__seed_wecom_components.sql:/docker-entrypoint-initdb.d/02_V2.sql:ro
+      - ./sql/V4__database_component.sql:/docker-entrypoint-initdb.d/03_V4.sql:ro
+      - ./sql/V5__credential_auth_types.sql:/docker-entrypoint-initdb.d/04_V5.sql:ro
+      - ./sql/V6__product_foundation.sql:/docker-entrypoint-initdb.d/05_V6.sql:ro
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--default-authentication-plugin=mysql_native_password"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DB_PASSWORD:-qingzhou_root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: qingzhou-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-qingzhou_redis}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-qingzhou_redis}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: qingzhou-server
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: 18080
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-qingzhou}
+      DB_USERNAME: root
+      DB_PASSWORD: ${DB_PASSWORD:-qingzhou_root}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-qingzhou_redis}
+      AES_KEY: ${AES_KEY:-qingzhou-aes256-secret-key-00001}
+      JWT_SECRET: ${JWT_SECRET:-qingzhou-jwt-hmac-secret-key-00001}
+      LICENSE_SIGN_KEY: ${LICENSE_SIGN_KEY:-qingzhou-license-hmac-secret-key01}
+      OPENAPI_PUBLIC_BASE_URL: ${OPENAPI_PUBLIC_BASE_URL:-http://localhost:18080}
+    ports:
+      - "18080:18080"
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: qingzhou-web
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "8080:80"
+
+volumes:
+  qz_mysql_data:

@@ -1,0 +1,9 @@
+.env
+.DS_Store
+server/target/
+server/*.class
+web/node_modules/
+web/dist/
+*.log
+.idea/
+.vscode/

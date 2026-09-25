@@ -15,6 +15,24 @@
 
     <PageState :error="loadError" @retry="boot" />
 
+    <div v-if="!showModeHint || records.length" class="stat-grid cols-3">
+      <div class="stat-card">
+        <div class="stat-label">全部任务</div>
+        <div class="stat-num">{{ stats.total }}</div>
+        <div class="stat-hint">24h 内将触发 {{ scheduleExtra.next24h ?? 0 }} 个</div>
+      </div>
+      <div class="stat-card stat-ok">
+        <div class="stat-label">运行中</div>
+        <div class="stat-num">{{ stats.running }}</div>
+        <div class="stat-hint">近 7 日成功 {{ scheduleExtra.success7d ?? 0 }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">已停止</div>
+        <div class="stat-num">{{ stats.stopped }}</div>
+        <div class="stat-hint">近 7 日失败 {{ scheduleExtra.failed7d ?? 0 }}</div>
+      </div>
+    </div>
+
     <el-alert
       v-if="modeHint && showModeHint && !records.length"
       :title="modeHint"
@@ -24,21 +42,6 @@
       class="mode-alert"
       @close="showModeHint = false"
     />
-
-    <div v-else class="stat-grid cols-3">
-      <div class="stat-card">
-        <div class="stat-label">全部任务</div>
-        <div class="stat-num">{{ stats.total }}</div>
-      </div>
-      <div class="stat-card stat-ok">
-        <div class="stat-label">运行中</div>
-        <div class="stat-num">{{ stats.running }}</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">已停止</div>
-        <div class="stat-num">{{ stats.stopped }}</div>
-      </div>
-    </div>
 
     <div class="qz-panel">
       <el-table class="qz-table" :data="records" v-loading="loading" stripe>
@@ -184,6 +187,7 @@ import { askConfirm } from '@/utils/confirm'
 import { formatTime } from '@/utils/format'
 import { normalizeTriggerInput } from '@/utils/triggerInput'
 import { networkErrorMessage } from '@/api/http'
+import { getModuleStats } from '@/api/dashboard'
 import {
   defaultScheduleForm,
   formToPayload,
@@ -233,6 +237,7 @@ const stats = computed(() => {
     stopped: Math.max(totalCount - running, 0),
   }
 })
+const scheduleExtra = ref({ next24h: 0, success7d: 0, failed7d: 0 })
 const emptyText = computed(() => {
   if (keyword.value) return '没有匹配的调度任务'
   if (!workflows.value.length) return '还没有已发布工作流，发布后即可配置自动触发'
@@ -458,7 +463,20 @@ function onRowCommand(command, row) {
 async function boot() {
   loadError.value = ''
   try {
-    await Promise.all([loadMode(), load(), loadStats(), loadWorkflows()])
+    const [, , , , statsRes] = await Promise.all([
+      loadMode(),
+      load(),
+      loadStats(),
+      loadWorkflows(),
+      getModuleStats().catch(() => null),
+    ])
+    if (statsRes?.data?.schedules) {
+      scheduleExtra.value = {
+        next24h: statsRes.data.schedules.next24h || 0,
+        success7d: statsRes.data.schedules.success7d || 0,
+        failed7d: statsRes.data.schedules.failed7d || 0,
+      }
+    }
   } catch (error) {
     loadError.value = networkErrorMessage(error)
   }

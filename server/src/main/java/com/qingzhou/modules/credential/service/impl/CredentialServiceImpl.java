@@ -10,6 +10,7 @@ import com.qingzhou.common.crypto.AesEncryptor;
 import com.qingzhou.common.exception.BizException;
 import com.qingzhou.common.json.Jsons;
 import com.qingzhou.infra.wecom.TokenManager;
+import com.qingzhou.modules.audit.service.AuditLogService;
 import com.qingzhou.modules.credential.dto.CredentialSaveRequest;
 import com.qingzhou.modules.credential.dto.CredentialTestVO;
 import com.qingzhou.modules.credential.dto.CredentialVO;
@@ -18,6 +19,7 @@ import com.qingzhou.modules.credential.mapper.CredentialMapper;
 import com.qingzhou.modules.credential.service.CredentialService;
 import com.qingzhou.modules.credential.support.HttpAuthCredentialSupport;
 import com.qingzhou.modules.credential.support.JdbcCredentialSupport;
+import com.qingzhou.modules.dashboard.service.ModuleStatsService;
 import com.qingzhou.modules.execution.engine.DatasourcePoolManager;
 import com.qingzhou.modules.execution.engine.auth.MtlsHttpClientFactory;
 import com.qingzhou.modules.execution.engine.auth.OAuth2ClientCredentialsClient;
@@ -48,6 +50,8 @@ public class CredentialServiceImpl extends ServiceImpl<CredentialMapper, Credent
     private final AesEncryptor aesEncryptor;
     private final Jsons jsons;
     private final WorkflowService workflowService;
+    private final ModuleStatsService moduleStatsService;
+    private final AuditLogService auditLogService;
     private final ObjectProvider<TokenManager> tokenManager;
     private final ObjectProvider<DatasourcePoolManager> datasourcePoolManager;
     private final ObjectProvider<OAuth2ClientCredentialsClient> oauth2Client;
@@ -97,8 +101,13 @@ public class CredentialServiceImpl extends ServiceImpl<CredentialMapper, Credent
     @Transactional
     public void removeCredential(Long id) {
         require(id);
+        long refs = moduleStatsService.credentialRefCount(id);
+        if (refs > 0) {
+            throw new BizException(ResultCode.CONFLICT, "仍有 " + refs + " 个工作流引用该凭证，无法删除");
+        }
         evict(id);
         removeById(id);
+        auditLogService.recordCurrent("CREDENTIAL_DELETE", "CREDENTIAL", String.valueOf(id), "SUCCESS", "删除凭证");
     }
 
     @Override

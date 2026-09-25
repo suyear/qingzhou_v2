@@ -1,9 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import AppLayout from '@/layouts/AppLayout.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/login',
+      name: 'login',
+      meta: { public: true },
+      component: () => import('@/views/Login.vue'),
+    },
     {
       path: '/',
       component: AppLayout,
@@ -16,6 +23,9 @@ const router = createRouter({
         { path: '/executions', name: 'executions', component: () => import('@/views/ExecutionList.vue') },
         { path: '/problems', redirect: (to) => ({ path: '/executions', query: { ...to.query, filter: 'problem' } }) },
         { path: '/openapi', name: 'openapi', component: () => import('@/views/OpenApiAppList.vue') },
+        { path: '/users', name: 'users', meta: { roles: ['ADMIN'] }, component: () => import('@/views/UserList.vue') },
+        { path: '/audit', name: 'audit', meta: { roles: ['ADMIN'] }, component: () => import('@/views/AuditLogList.vue') },
+        { path: '/settings', name: 'settings', meta: { roles: ['ADMIN'] }, component: () => import('@/views/SystemSettings.vue') },
         {
           path: '/designer/:id?',
           name: 'designer',
@@ -25,6 +35,24 @@ const router = createRouter({
       ],
     },
   ],
+})
+
+router.beforeEach((to) => {
+  const auth = useAuthStore()
+  if (to.meta.public) {
+    if (auth.isLoggedIn.value && to.path === '/login') {
+      return '/'
+    }
+    return true
+  }
+  if (!auth.isLoggedIn.value) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  const needRoles = to.meta.roles
+  if (needRoles?.length && !needRoles.some((r) => auth.hasRole(r))) {
+    return '/'
+  }
+  return true
 })
 
 export default router

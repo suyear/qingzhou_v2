@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 
 export const backendUnreachable = ref(false)
 
@@ -10,6 +11,7 @@ const http = axios.create({
 
 let lastNetworkToastAt = 0
 const NETWORK_TOAST_GAP_MS = 2500
+let redirectingLogin = false
 
 function isNetworkFailure(err) {
   return !err.response && (err.code === 'ERR_NETWORK' || err.code === 'ECONNABORTED' || err.message === 'Network Error')
@@ -26,7 +28,8 @@ export function networkErrorMessage(err) {
   const status = err.response?.status
   const serverMsg = err.response?.data?.message
   if (status === 404) return serverMsg || '接口不存在（404）'
-  if (status === 401 || status === 403) return serverMsg || '没有权限执行该操作'
+  if (status === 401) return serverMsg || '请先登录'
+  if (status === 403) return serverMsg || '没有权限执行该操作'
   if (status >= 500) return serverMsg || '服务暂时不可用，请稍后重试'
   return serverMsg || err.message || '网络异常'
 }
@@ -42,11 +45,33 @@ function toastError(message, isNetwork) {
   ElMessage.error(message)
 }
 
+function goLogin() {
+  if (redirectingLogin) return
+  redirectingLogin = true
+  const auth = useAuthStore()
+  auth.clearSession()
+  const redirect = encodeURIComponent(window.location.pathname + window.location.search)
+  window.location.href = `/login?redirect=${redirect}`
+}
+
+http.interceptors.request.use((config) => {
+  const auth = useAuthStore()
+  const token = auth.getToken()
+  if (token) {
+    config.headers = config.headers || {}
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
 http.interceptors.response.use(
   (res) => {
     backendUnreachable.value = false
     const body = res.data
     if (body && typeof body.code === 'number' && body.code !== 0) {
+      if (body.code === 401) {
+        goLogin()
+      }
       ElMessage.error(body.message || '请求失败')
       return Promise.reject(body)
     }
@@ -58,6 +83,10 @@ http.interceptors.response.use(
         backendUnreachable.value = true
       }
       return Promise.reject(err)
+    }
+    const status = err.response?.status
+    if (status === 401) {
+      goLogin()
     }
     const network = isNetworkFailure(err)
     if (network) {

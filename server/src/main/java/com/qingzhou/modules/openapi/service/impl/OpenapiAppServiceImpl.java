@@ -10,6 +10,7 @@ import com.qingzhou.common.crypto.AesEncryptor;
 import com.qingzhou.common.crypto.SignatureUtil;
 import com.qingzhou.common.exception.BizException;
 import com.qingzhou.common.json.Jsons;
+import com.qingzhou.modules.audit.service.AuditLogService;
 import com.qingzhou.modules.openapi.dto.OpenapiAppBindRequest;
 import com.qingzhou.modules.openapi.dto.OpenapiAppCreateRequest;
 import com.qingzhou.modules.openapi.dto.OpenapiAppCreatedVO;
@@ -43,6 +44,7 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
     private final OpenapiAppWorkflowService openapiAppWorkflowService;
     private final WorkflowService workflowService;
     private final Jsons jsons;
+    private final AuditLogService auditLogService;
 
     @Override
     public IPage<OpenapiAppListVO> pageApps(PageQuery query) {
@@ -119,6 +121,8 @@ public class OpenapiAppServiceImpl extends ServiceImpl<OpenapiAppMapper, Openapi
         vo.setAppName(app.getAppName());
         vo.setAppKey(app.getAppKey());
         vo.setAppSecret(appSecret);
+        auditLogService.recordCurrent("OPENAPI_RESET_SECRET", "OPENAPI_APP", String.valueOf(id),
+                "SUCCESS", "重置 Secret: " + app.getAppName());
         return vo;
     }
 

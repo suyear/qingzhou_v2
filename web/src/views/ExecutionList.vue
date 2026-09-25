@@ -41,6 +41,26 @@
     </PageHeader>
     <PageState :error="loadError" @retry="load" />
 
+    <div class="stat-grid cols-4" v-if="execStats">
+      <div class="stat-card">
+        <div class="stat-label">今日执行</div>
+        <div class="stat-num">{{ execStats.todayTotal ?? 0 }}</div>
+      </div>
+      <div class="stat-card stat-ok">
+        <div class="stat-label">今日成功</div>
+        <div class="stat-num">{{ execStats.todaySuccess ?? 0 }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">今日失败</div>
+        <div class="stat-num">{{ execStats.todayFailed ?? 0 }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">平均耗时</div>
+        <div class="stat-num">{{ execStats.todayAvgMs != null ? `${execStats.todayAvgMs}ms` : '—' }}</div>
+        <div class="stat-hint">超时 {{ execStats.todayTimeout ?? 0 }}</div>
+      </div>
+    </div>
+
     <div class="view-tabs">
       <button
         type="button"
@@ -141,6 +161,7 @@ import ExecutionChainDrawer from '@/components/ExecutionChainDrawer.vue'
 import { askConfirm } from '@/utils/confirm'
 import { pageWorkflows } from '@/api/workflow'
 import { getExecutionChain, pageExecutions, replayExecution } from '@/api/execution'
+import { getModuleStats } from '@/api/dashboard'
 import { networkErrorMessage } from '@/api/http'
 import { durationText, execStatusLabel, formatTime } from '@/utils/format'
 
@@ -153,6 +174,7 @@ const current = ref(1)
 const size = ref(10)
 const loading = ref(false)
 const loadError = ref('')
+const execStats = ref(null)
 const keyword = ref(route.query.keyword || '')
 const workflowId = ref(route.query.workflowId ? Number(route.query.workflowId) : null)
 const triggerType = ref(route.query.triggerType || '')
@@ -202,18 +224,22 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const res = await pageExecutions({
-      current: current.value,
-      size: size.value,
-      keyword: keyword.value,
-      workflowId: workflowId.value || undefined,
-      triggerType: triggerType.value || undefined,
-      triggerAppId: triggerAppId.value || undefined,
-      status: viewFilter.value === 'all' ? (status.value || undefined) : undefined,
-      problem: viewFilter.value === 'problem' ? true : undefined,
-    })
+    const [res, statsRes] = await Promise.all([
+      pageExecutions({
+        current: current.value,
+        size: size.value,
+        keyword: keyword.value,
+        workflowId: workflowId.value || undefined,
+        triggerType: triggerType.value || undefined,
+        triggerAppId: triggerAppId.value || undefined,
+        status: viewFilter.value === 'all' ? (status.value || undefined) : undefined,
+        problem: viewFilter.value === 'problem' ? true : undefined,
+      }),
+      getModuleStats().catch(() => null),
+    ])
     records.value = res.data?.records || []
     total.value = Number(res.data?.total || 0)
+    execStats.value = statsRes?.data?.executions || null
   } catch (error) {
     loadError.value = networkErrorMessage(error)
     records.value = []
