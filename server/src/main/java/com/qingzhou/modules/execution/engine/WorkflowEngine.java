@@ -54,6 +54,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class WorkflowEngine {
 
     private static final Set<String> META_KEYS = HttpUrlSupport.META_KEYS;
+    private static final String INPUT_SOURCE_NODE = "__input__";
     private static final DateTimeFormatter NO_FMT = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
 
     private final WorkflowService workflowService;
@@ -128,6 +129,7 @@ public class WorkflowEngine {
 
         ExecutionInstance instance = startInstance(runtime, triggerType, appId, input, spec.snapshotId());
         Map<String, Object> outputs = new ConcurrentHashMap<>();
+        Map<String, Object> requestPayloads = new ConcurrentHashMap<>();
         AtomicBoolean failed = new AtomicBoolean(false);
         AtomicReference<String> failMsg = new AtomicReference<>();
         LocalDateTime started = LocalDateTime.now();
@@ -141,7 +143,8 @@ public class WorkflowEngine {
                 for (String nodeId : level) {
                     futures.add(CompletableFuture.runAsync(() -> {
                         try {
-                            Object output = executeNode(instance, runtime, nodeMap.get(nodeId), input, outputs, mappings);
+                            Object output = executeNode(
+                                    instance, runtime, nodeMap.get(nodeId), input, outputs, requestPayloads, mappings);
                             if (output != null) {
                                 outputs.put(nodeId, output);
                             }
@@ -189,9 +192,11 @@ public class WorkflowEngine {
             DagNode dagNode,
             Map<String, Object> input,
             Map<String, Object> outputs,
+            Map<String, Object> requestPayloads,
             List<ParamMappingItem> mappings) {
         ApiComponent component = resolveComponent(dagNode);
-        Map<String, Object> payload = buildPayload(dagNode, input, outputs, mappings);
+        Map<String, Object> payload = buildPayload(dagNode, input, outputs, requestPayloads, mappings);
+        requestPayloads.put(dagNode.getId(), payload);
         ExecutionNodeLog nodeLog = new ExecutionNodeLog();
         nodeLog.setExecutionId(instance.getId());
         nodeLog.setNodeId(dagNode.getId());
@@ -378,6 +383,7 @@ public class WorkflowEngine {
             DagNode dagNode,
             Map<String, Object> input,
             Map<String, Object> outputs,
+            Map<String, Object> requestPayloads,
             List<ParamMappingItem> mappings) {
         Map<String, Object> payload = new LinkedHashMap<>();
         if (input != null) {
@@ -395,12 +401,28 @@ public class WorkflowEngine {
                 if (!dagNode.getId().equals(mapping.getToNode())) {
                     continue;
                 }
-                Object source = outputs.get(mapping.getFromNode());
-                Object value = JsonPaths.get(source, mapping.getFromPath());
+                Object value = resolveMappingValue(mapping, input, outputs, requestPayloads);
                 JsonPaths.put(payload, mapping.getToPath(), value);
             }
         }
         return payload;
+    }
+
+    private Object resolveMappingValue(
+            ParamMappingItem mapping,
+            Map<String, Object> input,
+            Map<String, Object> outputs,
+            Map<String, Object> requestPayloads) {
+        String fromSource = mapping.getFromSource() == null ? "" : mapping.getFromSource().trim();
+        if (INPUT_SOURCE_NODE.equals(mapping.getFromNode()) || "input".equalsIgnoreCase(fromSource)) {
+            return JsonPaths.get(input, mapping.getFromPath());
+        }
+        if ("request".equalsIgnoreCase(fromSource)) {
+            Object source = requestPayloads == null ? null : requestPayloads.get(mapping.getFromNode());
+            return JsonPaths.get(source, mapping.getFromPath());
+        }
+        Object source = outputs.get(mapping.getFromNode());
+        return JsonPaths.get(source, mapping.getFromPath());
     }
 
     private String resolveToken(Workflow workflow, ApiComponent component) {

@@ -3,13 +3,21 @@
     <div class="param-head">
       <div class="param-title">
         <div class="param-label">{{ fieldLabel(field) }}</div>
-        <div v-if="field.description && field.key && field.description !== field.key" class="param-key" :title="field.key">
+        <div v-if="field.key" class="param-key" :title="field.key">
           {{ field.key }}
+          <span v-if="field.custom" class="custom-mark">自定义</span>
         </div>
       </div>
       <el-tag v-if="field.required" size="small" type="danger" effect="plain">必填</el-tag>
       <el-tag v-else size="small" type="info" effect="plain">可选</el-tag>
       <el-icon v-if="isDone" class="done-icon"><Check /></el-icon>
+      <button
+        v-if="field.custom"
+        type="button"
+        class="remove-btn"
+        title="移除此参数"
+        @click="emit('remove', field.key)"
+      >×</button>
     </div>
 
     <div class="mode-cards">
@@ -23,23 +31,13 @@
         <span class="mode-desc">写死不变</span>
       </button>
       <button
-        v-if="upstreamNodes.length"
         type="button"
         class="mode-card"
-        :class="{ active: mode === 'upstream' }"
-        @click="onModeChange('upstream')"
+        :class="{ active: mode === 'data' }"
+        @click="onModeChange('data')"
       >
-        <span class="mode-name">接上一步</span>
-        <span class="mode-desc">用上游结果</span>
-      </button>
-      <button
-        type="button"
-        class="mode-card"
-        :class="{ active: mode === 'runtime' }"
-        @click="onModeChange('runtime')"
-      >
-        <span class="mode-name">外部传入</span>
-        <span class="mode-desc">调用时填写</span>
+        <span class="mode-name">取数据</span>
+        <span class="mode-desc">入参或前序步骤</span>
       </button>
     </div>
 
@@ -71,28 +69,50 @@
       />
     </div>
 
-    <div v-else-if="mode === 'upstream'" class="param-value">
-      <div class="upstream-box">
-        <span class="upstream-from">从「{{ upstreamLabel }}」取字段</span>
+    <div v-else-if="mode === 'data'" class="param-value">
+      <div class="data-box">
         <el-select
-          :model-value="binding.fromField || ''"
+          :model-value="sourceValue"
           filterable
           allow-create
-          placeholder="选择返回字段"
+          default-first-option
+          placeholder="选择数据来源，或输入入参键"
           style="width: 100%"
-          @change="(val) => emitChange({
-            mode: 'upstream',
-            fromNode: binding.fromNode || upstreamNodes[0]?.id,
-            fromField: val,
-          })"
+          @change="onSourceChange"
         >
-          <el-option v-for="name in fieldOptions" :key="name" :value="name" :label="name" />
+          <el-option-group label="工作流入参">
+            <el-option
+              :value="`input:${field.key}`"
+              :label="`本字段同名入参（${field.key}）`"
+            />
+            <el-option
+              v-for="item in inputFields"
+              :key="`input:${item.key}`"
+              :value="`input:${item.key}`"
+              :label="inputOptionLabel(item)"
+            />
+          </el-option-group>
+          <el-option-group
+            v-for="(step, index) in upstreamSources"
+            :key="step.id"
+            :label="`第 ${index + 1} 步 · ${step.name}`"
+          >
+            <el-option
+              v-for="name in step.requestFields"
+              :key="`${step.id}:request:${name}`"
+              :value="`${step.id}:request:${name}`"
+              :label="`请求 · ${name}`"
+            />
+            <el-option
+              v-for="name in step.responseFields"
+              :key="`${step.id}:output:${name}`"
+              :value="`${step.id}:output:${name}`"
+              :label="`响应 · ${name}`"
+            />
+          </el-option-group>
         </el-select>
+        <p class="data-hint">{{ dataHint }}</p>
       </div>
-    </div>
-
-    <div v-else class="param-value runtime-box">
-      试运行、定时任务、开放 API 调用时由外部填写此参数
     </div>
   </div>
 </template>
@@ -105,41 +125,144 @@ import { fieldLabel, isFieldConfigured } from '@/utils/workflowBinding'
 const props = defineProps({
   field: { type: Object, required: true },
   binding: { type: Object, default: () => ({}) },
-  upstreamNodes: { type: Array, default: () => [] },
-  upstreamFieldMap: { type: Object, default: () => ({}) },
+  upstreamSources: { type: Array, default: () => [] },
+  inputFields: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['change'])
+const emit = defineEmits(['change', 'remove'])
 
-const mode = computed(() => props.binding.mode || 'fixed')
+const mode = computed(() => {
+  const m = props.binding.mode || 'fixed'
+  if (m === 'runtime' || m === 'upstream') return 'data'
+  return 'fixed'
+})
+
 const isDone = computed(() => {
   if (!props.field.required) return false
   return isFieldConfigured(props.binding, props.field)
 })
-const upstreamLabel = computed(() => props.upstreamNodes[0]?.name || '上一步')
 
-const fieldOptions = computed(() => {
-  const nodeId = props.binding.fromNode || props.upstreamNodes[0]?.id
-  return props.upstreamFieldMap[nodeId] || []
+const sourceValue = computed(() => {
+  if (props.binding.mode === 'runtime') {
+    const key = props.binding.inputKey || props.field.key
+    return key ? `input:${key}` : ''
+  }
+  if (props.binding.mode === 'upstream' && props.binding.fromNode && props.binding.fromField) {
+    const side = props.binding.fromSource === 'request' ? 'request' : 'output'
+    return `${props.binding.fromNode}:${side}:${props.binding.fromField}`
+  }
+  return ''
 })
+
+const dataHint = computed(() => {
+  if (props.binding.mode === 'runtime') {
+    const key = props.binding.inputKey || props.field.key
+    if (key && key !== props.field.key) {
+      return `调用时填入参 ${key}，映射到本步 ${props.field.key}`
+    }
+    return '试运行 / 调度 / 开放 API 调用时填写'
+  }
+  if (props.binding.mode === 'upstream') {
+    const step = props.upstreamSources.find((item) => item.id === props.binding.fromNode)
+    const side = props.binding.fromSource === 'request' ? '请求' : '响应'
+    return `取自「${step?.name || '前序步骤'}」的${side}字段`
+  }
+  return '从工作流入参或前序步骤的请求/响应取值'
+})
+
+function inputOptionLabel(item) {
+  if (item.description && item.description !== item.key) {
+    return `${item.description}（${item.key}）`
+  }
+  return item.key
+}
 
 function emitChange(patch) {
   emit('change', { key: props.field.key, ...patch })
 }
 
 function onModeChange(nextMode) {
-  if (nextMode === mode.value) return
   if (nextMode === 'fixed') {
-    emitChange({ mode: 'fixed', value: props.binding.value ?? '', fromNode: '', fromField: '' })
+    emitChange({
+      mode: 'fixed',
+      value: props.binding.value ?? '',
+      fromNode: '',
+      fromField: '',
+      fromSource: '',
+      inputKey: '',
+    })
     return
   }
-  if (nextMode === 'upstream') {
-    const fromNode = props.upstreamNodes[0]?.id || ''
-    const fromField = fieldOptions.value[0] || props.field.key
-    emitChange({ mode: 'upstream', fromNode, fromField, value: '' })
+  if (props.inputFields.length) {
+    const key = props.inputFields.find((item) => item.key === props.field.key)?.key
+      || props.inputFields[0].key
+    emitChange({
+      mode: 'runtime',
+      inputKey: key,
+      fromNode: '',
+      fromField: '',
+      fromSource: '',
+      value: '',
+    })
     return
   }
-  emitChange({ mode: 'runtime', value: '', fromNode: '', fromField: '' })
+  const step = props.upstreamSources[0]
+  if (step) {
+    const fromField = step.responseFields?.[0] || step.requestFields?.[0] || props.field.key
+    const fromSource = step.responseFields?.includes(fromField) ? 'output' : 'request'
+    emitChange({
+      mode: 'upstream',
+      fromNode: step.id,
+      fromField,
+      fromSource,
+      inputKey: '',
+      value: '',
+    })
+    return
+  }
+  emitChange({
+    mode: 'runtime',
+    inputKey: props.field.key,
+    fromNode: '',
+    fromField: '',
+    fromSource: '',
+    value: '',
+  })
+}
+
+function onSourceChange(raw) {
+  let value = String(raw || '').trim()
+  if (!value) return
+  // allow-create: 用户直接输入入参键
+  if (!value.includes(':')) {
+    value = `input:${value}`
+  }
+  if (value.startsWith('input:')) {
+    const inputKey = value.slice('input:'.length)
+    emitChange({
+      mode: 'runtime',
+      inputKey,
+      fromNode: '',
+      fromField: '',
+      fromSource: '',
+      value: '',
+    })
+    return
+  }
+  const parts = value.split(':')
+  if (parts.length >= 3) {
+    const fromNode = parts[0]
+    const fromSource = parts[1] === 'request' ? 'request' : 'output'
+    const fromField = parts.slice(2).join(':')
+    emitChange({
+      mode: 'upstream',
+      fromNode,
+      fromField,
+      fromSource,
+      inputKey: '',
+      value: '',
+    })
+  }
 }
 </script>
 
@@ -158,24 +281,38 @@ function onModeChange(nextMode) {
   gap: 8px;
   margin-bottom: 12px;
 }
-.param-title {
-  flex: 1;
-  min-width: 0;
-}
-.param-label {
-  font-size: 14px;
-  font-weight: 600;
-}
+.param-title { flex: 1; min-width: 0; }
+.param-label { font-size: 14px; font-weight: 600; }
 .param-key {
   margin-top: 2px;
   font-size: 11px;
   color: var(--qz-text-muted);
   font-family: var(--qz-code-font);
 }
+.custom-mark {
+  margin-left: 6px;
+  font-family: inherit;
+  color: var(--el-color-primary);
+}
 .done-icon { color: var(--el-color-success); font-size: 16px; }
+.remove-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--qz-border);
+  border-radius: 6px;
+  background: var(--qz-card);
+  color: var(--qz-text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.remove-btn:hover {
+  border-color: var(--el-color-danger);
+  color: var(--el-color-danger);
+}
 .mode-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -188,7 +325,6 @@ function onModeChange(nextMode) {
   cursor: pointer;
   text-align: center;
   touch-action: manipulation;
-  transition: border-color 0.12s, background 0.12s;
 }
 .mode-card:hover {
   border-color: var(--el-color-primary-light-5);
@@ -212,7 +348,7 @@ function onModeChange(nextMode) {
   color: var(--qz-text-muted);
 }
 .param-value { margin-top: 4px; }
-.upstream-box {
+.data-box {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -221,20 +357,10 @@ function onModeChange(nextMode) {
   background: var(--qz-fill);
   border: 1px dashed var(--el-color-primary-light-7);
 }
-.upstream-from {
+.data-hint {
+  margin: 0;
   font-size: 12px;
-  color: var(--el-color-primary);
-  font-weight: 600;
-}
-.runtime-box {
-  padding: 12px;
-  border-radius: var(--qz-radius);
-  background: var(--qz-fill);
-  font-size: 13px;
   color: #64748b;
   line-height: 1.5;
-}
-@media (max-width: 520px) {
-  .mode-cards { grid-template-columns: 1fr; }
 }
 </style>

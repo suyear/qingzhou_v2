@@ -40,6 +40,22 @@
           <button
             type="button"
             class="left-tab"
+            :class="{ active: leftTab === 'inputs' }"
+            @click="leftTab = 'inputs'"
+          >
+            入参 ({{ inputFields.length }})
+          </button>
+          <button
+            type="button"
+            class="left-tab"
+            :class="{ active: leftTab === 'outputs' }"
+            @click="leftTab = 'outputs'"
+          >
+            出参
+          </button>
+          <button
+            type="button"
+            class="left-tab"
             :class="{ active: leftTab === 'add' }"
             @click="leftTab = 'add'"
           >
@@ -121,6 +137,92 @@
               </div>
             </div>
           </nav>
+
+          <section v-show="leftTab === 'inputs'" class="inputs-panel">
+            <p class="quick-hint">试运行、定时调度、开放 API 共用这组入参。步骤里选「外部传入」时可绑定到这里的键（支持异名）。</p>
+            <div v-if="!inputFields.length" class="inputs-empty">
+              <p>还没有工作流入参</p>
+              <p class="inputs-empty-sub">可在此添加，或在步骤参数中选「外部传入」自动出现</p>
+            </div>
+            <div v-for="(row, index) in inputFields" :key="`${row.key}-${index}`" class="input-row">
+              <el-input
+                :model-value="row.key"
+                placeholder="参数键，如 userId"
+                class="input-key"
+                @change="(val) => onInputKeyChange(index, val)"
+              />
+              <el-input
+                :model-value="row.description"
+                placeholder="说明（选填）"
+                class="input-desc"
+                @input="(val) => patchInputField(index, { description: val })"
+              />
+              <el-checkbox
+                :model-value="row.required"
+                @change="(val) => patchInputField(index, { required: val })"
+              >必填</el-checkbox>
+              <button type="button" class="op-btn danger" title="删除" @click="removeInputField(index)">×</button>
+            </div>
+            <el-button type="primary" plain class="add-input-btn" @click="addInputField">+ 添加入参</el-button>
+          </section>
+
+          <section v-show="leftTab === 'outputs'" class="inputs-panel">
+            <p class="quick-hint">发布后开放 API / 调度调用方看到的结果形态。试运行仍可在右侧看各步骤明细。</p>
+            <div class="output-mode">
+              <el-radio-group :model-value="outputSchema.mode || 'last'" @change="onOutputModeChange">
+                <el-radio-button value="last">仅最后一步</el-radio-button>
+                <el-radio-button value="fields">字段投影</el-radio-button>
+              </el-radio-group>
+            </div>
+            <p v-if="(outputSchema.mode || 'last') === 'last'" class="inputs-empty-sub">
+              对外返回最后一步的完整响应（与单节点 unwrap 一致）。
+            </p>
+            <template v-else>
+              <div v-if="!(outputSchema.fields || []).length" class="inputs-empty">
+                <p>还没有出参字段</p>
+                <p class="inputs-empty-sub">从某步响应中挑选要对外暴露的字段</p>
+              </div>
+              <div
+                v-for="(row, index) in (outputSchema.fields || [])"
+                :key="`out-${index}`"
+                class="input-row"
+              >
+                <el-input
+                  :model-value="row.key"
+                  placeholder="对外字段名"
+                  @change="(val) => patchOutputField(index, { key: val })"
+                />
+                <el-select
+                  :model-value="outputSourceValue(row)"
+                  filterable
+                  allow-create
+                  placeholder="来源：步骤 · 响应字段"
+                  style="width: 100%"
+                  @change="(val) => onOutputSourceChange(index, val)"
+                >
+                  <el-option-group
+                    v-for="(step, si) in allStepSources"
+                    :key="step.id"
+                    :label="`第 ${si + 1} 步 · ${step.name}`"
+                  >
+                    <el-option
+                      v-for="name in step.responseFields"
+                      :key="`${step.id}:${name}`"
+                      :value="`${step.id}:${name}`"
+                      :label="name"
+                    />
+                  </el-option-group>
+                </el-select>
+                <el-input
+                  :model-value="row.description"
+                  placeholder="说明（选填）"
+                  @input="(val) => patchOutputField(index, { description: val })"
+                />
+                <button type="button" class="op-btn danger" title="删除" @click="removeOutputField(index)">×</button>
+              </div>
+              <el-button type="primary" plain class="add-input-btn" @click="addOutputField">+ 添加出参字段</el-button>
+            </template>
+          </section>
 
           <section v-show="leftTab === 'add'" ref="quickAddRef" class="quick-add">
             <p class="quick-hint">从组件库挑选 HTTP 接口或数据库脚本，添加到调用链末尾</p>
@@ -205,8 +307,9 @@
           </el-form>
 
           <div v-if="!fields.length" class="config-empty">
-            <el-alert type="success" :closable="false" show-icon title="此接口无需填写参数" />
+            <el-alert type="success" :closable="false" show-icon title="此接口无需填写组件参数，也可自行添加参数" />
             <div class="empty-actions">
+              <el-button @click="showAddCustom = true">+ 添加参数</el-button>
               <el-button type="primary" @click="focusQuickAdd">+ 添加下一步</el-button>
               <el-button type="success" :disabled="!canTryRun" @click="emit('try-run')">试运行</el-button>
             </div>
@@ -223,9 +326,10 @@
                 :key="field.key"
                 :field="field"
                 :binding="findBinding(field.key)"
-                :upstream-nodes="upstreamNodes"
-                :upstream-field-map="upstreamFieldMap"
+                :upstream-sources="upstreamSources"
+                :input-fields="inputFields"
                 @change="(patch) => patchBinding(field.key, patch)"
+                @remove="removeCustomField"
               />
             </div>
 
@@ -240,11 +344,37 @@
                   :key="field.key"
                   :field="field"
                   :binding="findBinding(field.key)"
-                  :upstream-nodes="upstreamNodes"
-                  :upstream-field-map="upstreamFieldMap"
+                  :upstream-sources="upstreamSources"
+                  :input-fields="inputFields"
                   @change="(patch) => patchBinding(field.key, patch)"
+                  @remove="removeCustomField"
                 />
               </template>
+            </div>
+
+            <div class="add-param-block">
+              <el-button v-if="!showAddCustom" @click="showAddCustom = true">+ 添加参数</el-button>
+              <div v-else class="add-param-form">
+                <el-input v-model="customDraft.key" placeholder="参数键，如 deptId" />
+                <el-input v-model="customDraft.description" placeholder="说明（选填）" />
+                <el-checkbox v-model="customDraft.required">必填</el-checkbox>
+                <div class="add-param-actions">
+                  <el-button type="primary" @click="confirmAddCustom">添加</el-button>
+                  <el-button @click="cancelAddCustom">取消</el-button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!fields.length && showAddCustom" class="add-param-block">
+            <div class="add-param-form">
+              <el-input v-model="customDraft.key" placeholder="参数键，如 deptId" />
+              <el-input v-model="customDraft.description" placeholder="说明（选填）" />
+              <el-checkbox v-model="customDraft.required">必填</el-checkbox>
+              <div class="add-param-actions">
+                <el-button type="primary" @click="confirmAddCustom">添加</el-button>
+                <el-button @click="cancelAddCustom">取消</el-button>
+              </div>
             </div>
           </div>
         </template>
@@ -264,10 +394,11 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import WorkflowParamField from './WorkflowParamField.vue'
-import { isFieldConfigured } from '@/utils/workflowBinding'
+import { isFieldConfigured, isValidParamKey, isMetaKey } from '@/utils/workflowBinding'
 import { CATEGORY_LABEL } from '@/utils/schema'
 
 const props = defineProps({
@@ -276,15 +407,21 @@ const props = defineProps({
   nodeName: { type: String, default: '' },
   fields: { type: Array, default: () => [] },
   bindings: { type: Array, default: () => [] },
-  upstreamNodes: { type: Array, default: () => [] },
-  upstreamFieldMap: { type: Object, default: () => ({}) },
+  upstreamSources: { type: Array, default: () => [] },
+  allStepSources: { type: Array, default: () => [] },
+  inputFields: { type: Array, default: () => [] },
+  outputSchema: { type: Object, default: () => ({ mode: 'last', fields: [] }) },
   components: { type: Array, default: () => [] },
   canTryRun: { type: Boolean, default: false },
   canPublish: { type: Boolean, default: false },
   canvasVisible: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['select', 'remove', 'move', 'add', 'update-name', 'update-bindings', 'try-run', 'publish', 'toggle-canvas'])
+const emit = defineEmits([
+  'select', 'remove', 'move', 'add', 'update-name', 'update-bindings',
+  'update-input-fields', 'update-output-schema', 'add-custom-field', 'remove-custom-field',
+  'try-run', 'publish', 'toggle-canvas',
+])
 
 const router = useRouter()
 const leftTab = ref('add')
@@ -292,6 +429,8 @@ const pickerKeyword = ref('')
 const quickAddRef = ref(null)
 const leftScrollRef = ref(null)
 const showOptional = ref(false)
+const showAddCustom = ref(false)
+const customDraft = reactive({ key: '', description: '', required: false })
 
 const selectedIndex = computed(() => {
   const idx = props.chainNodes.findIndex((item) => item.id === props.selectedId)
@@ -330,6 +469,8 @@ const groupedComponents = computed(() => {
 
 watch(() => props.selectedId, async (id) => {
   showOptional.value = false
+  showAddCustom.value = false
+  cancelAddCustom()
   if (!id) return
   leftTab.value = 'steps'
   await nextTick()
@@ -350,7 +491,156 @@ function patchBinding(key, patch) {
   if (!next.find((item) => item.key === key)) {
     next.push({ key, mode: 'fixed', value: '', ...patch })
   }
+  // 外部传入选了新 key 时，通知父级把入参面板补上
+  if (patch.mode === 'runtime' && patch.inputKey) {
+    ensureInputKey(patch.inputKey, key)
+  }
   emit('update-bindings', next)
+}
+
+function ensureInputKey(inputKey, fieldKey) {
+  const key = String(inputKey || '').trim()
+  if (!key) return
+  if (props.inputFields.some((item) => item.key === key)) return
+  const field = props.fields.find((item) => item.key === fieldKey)
+  emit('update-input-fields', [
+    ...props.inputFields,
+    {
+      key,
+      type: field?.type || 'string',
+      required: Boolean(field?.required),
+      description: field?.description || '',
+    },
+  ])
+}
+
+function patchInputField(index, patch) {
+  const next = props.inputFields.map((item, i) => (i === index ? { ...item, ...patch } : item))
+  emit('update-input-fields', next)
+}
+
+function onInputKeyChange(index, raw) {
+  const nextKey = String(raw || '').trim()
+  const prev = props.inputFields[index]
+  if (!prev) return
+  if (!isValidParamKey(nextKey)) {
+    ElMessage.warning('参数键需以字母或下划线开头，仅含字母数字下划线')
+    return
+  }
+  if (isMetaKey(nextKey)) {
+    ElMessage.warning('不能使用系统保留字段名')
+    return
+  }
+  if (props.inputFields.some((item, i) => i !== index && item.key === nextKey)) {
+    ElMessage.warning('入参键已存在')
+    return
+  }
+  const next = props.inputFields.map((item, i) => (i === index ? { ...item, key: nextKey } : item))
+  emit('update-input-fields', next, { renameFrom: prev.key, renameTo: nextKey })
+}
+
+function addInputField() {
+  let n = props.inputFields.length + 1
+  let key = `param${n}`
+  while (props.inputFields.some((item) => item.key === key)) {
+    n += 1
+    key = `param${n}`
+  }
+  emit('update-input-fields', [
+    ...props.inputFields,
+    { key, type: 'string', required: false, description: '' },
+  ])
+}
+
+function removeInputField(index) {
+  const removed = props.inputFields[index]
+  const next = props.inputFields.filter((_, i) => i !== index)
+  emit('update-input-fields', next, { removedKey: removed?.key })
+}
+
+function onOutputModeChange(mode) {
+  emit('update-output-schema', {
+    ...props.outputSchema,
+    mode,
+    fields: props.outputSchema.fields || [],
+  })
+}
+
+function patchOutputField(index, patch) {
+  const fields = [...(props.outputSchema.fields || [])]
+  fields[index] = { ...fields[index], ...patch }
+  emit('update-output-schema', { ...props.outputSchema, mode: 'fields', fields })
+}
+
+function outputSourceValue(row) {
+  if (!row?.fromNode) return ''
+  const field = String(row.fromPath || '').replace(/^\$\.?/, '')
+  return field ? `${row.fromNode}:${field}` : row.fromNode
+}
+
+function onOutputSourceChange(index, raw) {
+  const value = String(raw || '')
+  const idx = value.indexOf(':')
+  if (idx < 0) return
+  const fromNode = value.slice(0, idx)
+  const fromField = value.slice(idx + 1)
+  const row = props.outputSchema.fields?.[index] || {}
+  patchOutputField(index, {
+    fromNode,
+    fromPath: fromField.startsWith('$.') ? fromField : `$.${fromField}`,
+    key: row.key || fromField,
+  })
+}
+
+function addOutputField() {
+  const last = props.allStepSources[props.allStepSources.length - 1]
+  const fromField = last?.responseFields?.[0] || 'data'
+  const fields = [...(props.outputSchema.fields || []), {
+    key: fromField,
+    fromNode: last?.id || '',
+    fromPath: `$.${fromField}`,
+    description: '',
+  }]
+  emit('update-output-schema', { mode: 'fields', fields })
+}
+
+function removeOutputField(index) {
+  const fields = (props.outputSchema.fields || []).filter((_, i) => i !== index)
+  emit('update-output-schema', { ...props.outputSchema, mode: 'fields', fields })
+}
+
+function confirmAddCustom() {
+  const key = String(customDraft.key || '').trim()
+  if (!isValidParamKey(key)) {
+    ElMessage.warning('参数键需以字母或下划线开头，仅含字母数字下划线')
+    return
+  }
+  if (isMetaKey(key)) {
+    ElMessage.warning('不能使用系统保留字段名')
+    return
+  }
+  if (props.fields.some((item) => item.key === key)) {
+    ElMessage.warning('该参数已存在')
+    return
+  }
+  emit('add-custom-field', {
+    key,
+    description: customDraft.description || key,
+    required: Boolean(customDraft.required),
+    type: 'string',
+  })
+  cancelAddCustom()
+}
+
+function cancelAddCustom() {
+  showAddCustom.value = false
+  customDraft.key = ''
+  customDraft.description = ''
+  customDraft.required = false
+}
+
+function removeCustomField(key) {
+  emit('remove-custom-field', key)
 }
 
 function selectStep(id) {
@@ -428,10 +718,10 @@ function focusQuickAdd() {
 }
 .left-tab {
   flex: 1;
-  padding: 12px 8px;
+  padding: 10px 4px;
   border: none;
   background: transparent;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--qz-text-muted);
   cursor: pointer;
@@ -592,6 +882,44 @@ function focusQuickAdd() {
 .quick-add {
   padding: 12px;
 }
+.inputs-panel {
+  padding: 12px;
+}
+.inputs-empty {
+  padding: 20px 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--qz-text-muted);
+}
+.inputs-empty-sub {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.input-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--qz-border);
+  border-radius: var(--qz-radius);
+  background: var(--qz-card);
+}
+.input-key,
+.input-desc { width: 100%; }
+.add-input-btn { width: 100%; margin-top: 4px; }
+.output-mode { margin-bottom: 12px; }
+.add-param-block { margin-top: 12px; }
+.add-param-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--qz-border);
+  border-radius: var(--qz-radius);
+  background: var(--qz-fill);
+}
+.add-param-actions { display: flex; gap: 8px; }
 .quick-hint {
   margin: 0 0 10px;
   font-size: 12px;

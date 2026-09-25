@@ -43,8 +43,10 @@
         :node-name="selectedData.componentName || ''"
         :fields="selectedFields"
         :bindings="currentBindings"
-        :upstream-nodes="upstreamNodesForSelected"
-        :upstream-field-map="upstreamFieldMap"
+        :upstream-sources="upstreamSourcesForSelected"
+        :all-step-sources="allStepSources"
+        :input-fields="inputFields"
+        :output-schema="outputSchema"
         :components="componentOptions"
         :can-try-run="!canvasEmpty && allConfigured"
         :can-publish="Boolean(route.params.id) && allConfigured"
@@ -55,6 +57,10 @@
         @move="moveStep"
         @update-name="updateNodeName"
         @update-bindings="onBindingsChange"
+        @update-input-fields="onInputFieldsUpdate"
+        @update-output-schema="onOutputSchemaUpdate"
+        @add-custom-field="onAddCustomField"
+        @remove-custom-field="onRemoveCustomField"
         @try-run="tryRun"
         @publish="publish"
         @toggle-canvas="toggleCanvas"
@@ -101,10 +107,14 @@
     </div>
 
     <el-dialog v-model="tryRunDialogVisible" title="试运行" width="560px">
-      <template v-if="runtimeFields.length">
+      <template v-if="tryRunFields.length">
         <p class="hint-block">填写以下参数后执行试运行（与调度 / 开放调用入参一致）</p>
         <el-form label-position="top" size="default">
-          <el-form-item v-for="field in runtimeFields" :key="field.key" :required="true">
+          <el-form-item
+            v-for="field in tryRunFields"
+            :key="field.key"
+            :required="field.required"
+          >
             <template #label>
               <span>{{ runtimeFieldLabel(field.key) }}</span>
               <span
@@ -119,7 +129,8 @@
       <template v-else>
         <p class="hint-block">当前编排没有需要外部传入的参数，将直接执行。</p>
       </template>
-      <el-collapse v-if="runtimeFields.length" class="json-advanced">
+      <p class="hint-block output-hint">{{ outputHint }}</p>
+      <el-collapse v-if="tryRunFields.length" class="json-advanced">
         <el-collapse-item title="高级：JSON 入参" name="json">
           <el-input v-model="tryRunInput" type="textarea" :rows="6" placeholder="{}" class="json-input" />
         </el-collapse-item>
@@ -215,11 +226,15 @@ import {
   bindingsToInputFields,
   bindingsToMappings,
   buildFieldMetaMap,
-  collectRuntimeBindings,
   defaultBinding,
   inferBindingsForNode,
   isNodeConfigured,
+  mergeInputFields,
+  mergeNodeFields,
+  normalizeOutputSchema,
+  outputSchemaHint,
   parseBindingValue,
+  renameInputKeyInBindings,
   responseFieldOptions,
   stepConfigSummary,
 } from '@/utils/workflowBinding'
@@ -247,6 +262,7 @@ const components = ref([])
 const credentials = ref([])
 const paramMappings = ref([])
 const inputFields = ref([])
+const outputSchema = ref({ mode: 'last', fields: [] })
 const nodeBindings = ref({})
 const tryRunInput = ref('{}')
 const tryRunForm = ref({})
@@ -276,10 +292,11 @@ const executionLink = computed(() => {
   return id ? `/executions?workflowId=${id}` : '/executions'
 })
 const selectedFields = computed(() => {
-  const code = selectedData.value.componentCode
-  const id = selectedData.value.componentId
-  const comp = components.value.find((item) => item.id === id || item.componentCode === code)
-  return schemaFields(comp)
+  nodeTick.value
+  if (!selectedId.value || !graph) return []
+  const node = graph.getCellById(selectedId.value)
+  if (!node || !node.isNode?.()) return []
+  return fieldsForNode(node)
 })
 const componentOptions = computed(() =>
   components.value.map((item) => ({
@@ -291,12 +308,20 @@ const chainNodes = computed(() => {
   nodeTick.value
   if (!graph) return []
   const ordered = getOrderedNodes()
-  return ordered.map((node, index) => {
+  const nodeNames = Object.fromEntries(
+    ordered.map((node) => [node.id, node.getData()?.componentName || node.id]),
+  )
+  const nodeIndexes = Object.fromEntries(
+    ordered.map((node, index) => [node.id, index + 1]),
+  )
+  const inputLabels = Object.fromEntries(
+    inputFields.value.map((item) => [item.key, item.description || item.key]),
+  )
+  return ordered.map((node) => {
     const data = node.getData() || {}
     const fields = fieldsForNode(node)
     const bindings = nodeBindings.value[node.id] || []
     const requiredCount = fields.filter((item) => item.required).length
-    const upstreamName = index > 0 ? ordered[index - 1].getData()?.componentName || '' : ''
     return {
       id: node.id,
       name: data.componentName || node.id,
@@ -304,7 +329,7 @@ const chainNodes = computed(() => {
       path: data.urlPath || urlPath(data.urlTemplate, data),
       configured: isNodeConfigured(bindings, fields),
       fieldCount: requiredCount,
-      summaryLines: stepConfigSummary(bindings, fields, upstreamName),
+      summaryLines: stepConfigSummary(bindings, fields, { nodeNames, nodeIndexes, inputLabels }),
     }
   })
 })
@@ -312,25 +337,18 @@ const currentBindings = computed(() => {
   if (!selectedId.value) return []
   return nodeBindings.value[selectedId.value] || []
 })
-const upstreamFieldMap = computed(() => {
-  const map = {}
-  if (!graph) return map
-  for (const node of graph.getNodes()) {
-    const comp = findComponent(node.getData())
-    map[node.id] = responseFieldOptions(comp)
-  }
-  return map
+const allStepSources = computed(() => {
+  nodeTick.value
+  if (!graph) return []
+  return getOrderedNodes().map((node) => buildStepSource(node))
 })
-const upstreamNodesForSelected = computed(() => {
+const upstreamSourcesForSelected = computed(() => {
   nodeTick.value
   if (!graph || !selectedId.value) return []
-  return getUpstreamNodes(selectedId.value).map((node) => ({
-    id: node.id,
-    name: node.getData()?.componentName || node.id,
-    fields: upstreamFieldMap.value[node.id] || [],
-  }))
+  return getUpstreamNodes(selectedId.value).map((node) => buildStepSource(node))
 })
-const runtimeFields = computed(() => collectRuntimeBindings(nodeBindings.value))
+const tryRunFields = computed(() => inputFields.value)
+const outputHint = computed(() => outputSchemaHint(outputSchema.value))
 const allConfigured = computed(() => chainNodes.value.length > 0 && chainNodes.value.every((item) => item.configured))
 const form = reactive({
   workflowName: '未命名工作流',
@@ -570,24 +588,44 @@ function findComponent(data) {
 }
 
 function fieldsForNode(node) {
-  return schemaFields(findComponent(node.getData()))
+  const data = node.getData() || {}
+  return mergeNodeFields(schemaFields(findComponent(data)), data)
+}
+
+function buildStepSource(node) {
+  const data = node.getData() || {}
+  const requestFields = fieldsForNode(node).map((item) => item.key)
+  for (const binding of nodeBindings.value[node.id] || []) {
+    if (binding?.key && !requestFields.includes(binding.key)) {
+      requestFields.push(binding.key)
+    }
+  }
+  return {
+    id: node.id,
+    name: data.componentName || node.id,
+    requestFields,
+    responseFields: responseFieldOptions(findComponent(data)),
+  }
 }
 
 function getUpstreamNodes(nodeId) {
   if (!graph) return []
-  return graph.getEdges()
-    .filter((edge) => edge.getTargetCellId() === nodeId)
-    .map((edge) => graph.getCellById(edge.getSourceCellId()))
-    .filter((cell) => cell && cell.isNode?.())
+  const ordered = getOrderedNodes()
+  const index = ordered.findIndex((item) => item.id === nodeId)
+  if (index <= 0) return []
+  return ordered.slice(0, index)
 }
 
 function buildBindingsForNode(node, force = false) {
   const fields = fieldsForNode(node)
   if (!force && nodeBindings.value[node.id]) return
-  const upstream = getUpstreamNodes(node.id).map((item) => ({
-    id: item.id,
-    fields: responseFieldOptions(findComponent(item.getData())),
-  }))
+  const upstream = getUpstreamNodes(node.id).map((item) => {
+    const source = buildStepSource(item)
+    return {
+      id: item.id,
+      fields: [...new Set([...(source.responseFields || []), ...(source.requestFields || [])])],
+    }
+  })
   nodeBindings.value = {
     ...nodeBindings.value,
     [node.id]: fields.map((field) => defaultBinding(field, upstream)),
@@ -650,6 +688,7 @@ function addToChain(item) {
   }
   nodeTick.value += 1
   buildBindingsForNode(node, true)
+  refreshInputFieldsFromBindings()
   selectNode(node.id)
   markDirty()
   if (canvasVisible.value) {
@@ -694,7 +733,97 @@ function onBindingsChange(bindings) {
     [selectedId.value]: bindings,
   }
   applyBindingsToSelectedNode()
+  // 外部传入新键并入入参面板
+  const metaMap = buildFieldMetaMap(nodeBindings.value, {
+    [selectedId.value]: fieldsForNode(graph.getCellById(selectedId.value)),
+  })
+  inputFields.value = mergeInputFields(inputFields.value, bindingsToInputFields(nodeBindings.value, metaMap))
   markDirty()
+  nodeTick.value += 1
+}
+
+function onInputFieldsUpdate(next, meta = {}) {
+  inputFields.value = next || []
+  if (meta.renameFrom && meta.renameTo) {
+    nodeBindings.value = renameInputKeyInBindings(nodeBindings.value, meta.renameFrom, meta.renameTo)
+  }
+  if (meta.removedKey) {
+    const removedKey = meta.removedKey
+    const patched = {}
+    for (const [nodeId, list] of Object.entries(nodeBindings.value)) {
+      patched[nodeId] = (list || []).map((item) => {
+        if (item.mode === 'runtime' && (item.inputKey || item.key) === removedKey) {
+          return { ...item, mode: 'fixed', value: '', inputKey: '' }
+        }
+        return item
+      })
+    }
+    nodeBindings.value = patched
+  }
+  markDirty()
+  nodeTick.value += 1
+}
+
+function onOutputSchemaUpdate(next) {
+  outputSchema.value = normalizeOutputSchema(next)
+  markDirty()
+}
+
+function onAddCustomField(field) {
+  const node = graph?.getCellById(selectedId.value)
+  if (!node || !field?.key) return
+  const data = { ...(node.getData() || {}) }
+  const custom = Array.isArray(data.customFields) ? [...data.customFields] : []
+  if (custom.some((item) => item.key === field.key)) return
+  custom.push({
+    key: field.key,
+    description: field.description || field.key,
+    required: Boolean(field.required),
+    type: field.type || 'string',
+  })
+  data.customFields = custom
+  node.setData(data)
+  selectedData.value = data
+  const upstream = getUpstreamNodes(node.id).map((item) => {
+    const source = buildStepSource(item)
+    return {
+      id: item.id,
+      fields: [...new Set([...(source.responseFields || []), ...(source.requestFields || [])])],
+    }
+  })
+  const bindings = [...(nodeBindings.value[selectedId.value] || [])]
+  bindings.push(defaultBinding(field, upstream))
+  nodeBindings.value = {
+    ...nodeBindings.value,
+    [selectedId.value]: bindings,
+  }
+  if (field.required || bindings[bindings.length - 1]?.mode === 'runtime') {
+    inputFields.value = mergeInputFields(inputFields.value, [{
+      key: field.key,
+      type: field.type || 'string',
+      required: Boolean(field.required),
+      description: field.description || '',
+    }])
+  }
+  markDirty()
+  nodeTick.value += 1
+}
+
+function onRemoveCustomField(key) {
+  const node = graph?.getCellById(selectedId.value)
+  if (!node || !key) return
+  const data = { ...(node.getData() || {}) }
+  data.customFields = (Array.isArray(data.customFields) ? data.customFields : [])
+    .filter((item) => item.key !== key)
+  delete data[key]
+  node.setData(data)
+  selectedData.value = data
+  nodeBindings.value = {
+    ...nodeBindings.value,
+    [selectedId.value]: (nodeBindings.value[selectedId.value] || []).filter((item) => item.key !== key),
+  }
+  markDirty()
+  nodeTick.value += 1
 }
 
 function applyBindingsToSelectedNode() {
@@ -733,7 +862,17 @@ function syncBindingsToPayload() {
   }
   const metaMap = buildFieldMetaMap(nodeBindings.value, fieldsByNode)
   paramMappings.value = bindingsToMappings(nodeBindings.value)
-  inputFields.value = bindingsToInputFields(nodeBindings.value, metaMap)
+  inputFields.value = mergeInputFields(inputFields.value, bindingsToInputFields(nodeBindings.value, metaMap))
+}
+
+function refreshInputFieldsFromBindings() {
+  if (!graph) return
+  const fieldsByNode = {}
+  for (const node of graph.getNodes()) {
+    fieldsByNode[node.id] = fieldsForNode(node)
+  }
+  const metaMap = buildFieldMetaMap(nodeBindings.value, fieldsByNode)
+  inputFields.value = mergeInputFields(inputFields.value, bindingsToInputFields(nodeBindings.value, metaMap))
 }
 
 function toBackendGraph() {
@@ -836,6 +975,7 @@ async function save() {
       graph: toBackendGraph(),
       paramMapping: paramMappings.value.filter((item) => item.fromNode && item.toNode && item.fromPath && item.toPath),
       inputSchema: fieldsToSchema(inputFields.value),
+      outputSchema: normalizeOutputSchema(outputSchema.value),
       credentialMode: form.credentialMode,
       credentialId: form.credentialMode === 'INDEPENDENT' ? form.credentialId : null,
     }
@@ -940,7 +1080,7 @@ async function tryRun() {
       return
     }
   }
-  const fields = collectRuntimeBindings(nodeBindings.value)
+  const fields = tryRunFields.value
   if (!fields.length) {
     await confirmTryRun()
     return
@@ -951,6 +1091,8 @@ async function tryRun() {
 }
 
 function runtimeFieldLabel(key) {
+  const panel = inputFields.value.find((item) => item.key === key)
+  if (panel?.description) return panel.description
   if (!graph) return key
   for (const node of graph.getNodes()) {
     const field = fieldsForNode(node).find((item) => item.key === key)
@@ -966,7 +1108,7 @@ async function confirmTryRun() {
   running.value = true
   try {
     let input = {}
-    if (runtimeFields.value.length) {
+    if (tryRunFields.value.length) {
       let parsed = null
       if (tryRunInput.value.trim()) {
         try {
@@ -979,7 +1121,8 @@ async function confirmTryRun() {
       input = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         ? parsed
         : { ...tryRunForm.value }
-      for (const field of runtimeFields.value) {
+      for (const field of tryRunFields.value) {
+        if (!field.required) continue
         if (!String(input[field.key] ?? '').trim()) {
           ElMessage.warning(`请填写 ${runtimeFieldLabel(field.key)}`)
           return
@@ -1032,7 +1175,9 @@ async function bootstrap() {
     restoreGraph(wf.graph)
     paramMappings.value = (wf.paramMapping || []).map((item) => ({ ...item }))
     inputFields.value = schemaToFields(wf.inputSchema)
+    outputSchema.value = normalizeOutputSchema(wf.outputSchema)
     initBindingsFromWorkflow(wf.paramMapping, wf.inputSchema)
+    refreshInputFieldsFromBindings()
     nodeTick.value += 1
     const first = chainNodes.value[0]
     if (first) selectNode(first.id)
@@ -1382,6 +1527,10 @@ onBeforeUnmount(() => {
   color: #94a3b8;
   font-size: 12px;
   margin: 0 0 10px;
+}
+.output-hint {
+  margin-top: 8px;
+  color: var(--el-color-primary);
 }
 .field-key-hint {
   display: block;

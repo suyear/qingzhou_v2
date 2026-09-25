@@ -2,12 +2,17 @@ package com.qingzhou.modules.execution.support;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.qingzhou.common.json.JsonPaths;
 import com.qingzhou.modules.execution.dto.ExecutionVO;
 import com.qingzhou.modules.execution.dto.OpenApiExecuteResultVO;
 import com.qingzhou.modules.execution.dto.RunResultVO;
 import com.qingzhou.modules.execution.dto.RunStepVO;
 import com.qingzhou.modules.execution.entity.ExecutionInstance;
 import com.qingzhou.modules.execution.entity.ExecutionNodeLog;
+import com.qingzhou.modules.workflow.entity.Workflow;
+import com.qingzhou.modules.workflow.entity.WorkflowSnapshot;
+import com.qingzhou.modules.workflow.service.WorkflowService;
+import com.qingzhou.modules.workflow.service.WorkflowSnapshotService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -22,6 +27,8 @@ import java.util.Map;
 public class ExecutionResultAssembler {
 
     private final ObjectMapper objectMapper;
+    private final WorkflowSnapshotService workflowSnapshotService;
+    private final WorkflowService workflowService;
 
     /** 编排试跑 / 立即触发：含步骤摘要，便于内部排障 */
     public RunResultVO from(ExecutionVO vo) {
@@ -33,7 +40,7 @@ public class ExecutionResultAssembler {
                     .build();
         }
         ExecutionInstance instance = vo.getInstance();
-        Map<String, Object> output = DbResultCleaner.stripMap(parseObjectMap(instance.getOutputResult()));
+        Object output = projectPublicOutput(vo);
 
         List<RunStepVO> steps = new ArrayList<>();
         for (ExecutionNodeLog log : vo.getLogs() == null ? List.<ExecutionNodeLog>of() : vo.getLogs()) {
@@ -74,14 +81,83 @@ public class ExecutionResultAssembler {
                 .status(instance.getStatus())
                 .durationMs(instance.getDurationMs())
                 .errorMsg(instance.getErrorMsg())
-                .output(buildPublicOutput(vo))
+                .output(projectPublicOutput(vo))
                 .build();
+    }
+
+    Object projectPublicOutput(ExecutionVO vo) {
+        Map<String, Object> schema = resolveOutputSchema(vo.getInstance());
+        String mode = schema == null ? "" : String.valueOf(schema.getOrDefault("mode", "")).trim();
+        if ("last".equalsIgnoreCase(mode)) {
+            return lastStepOutput(vo);
+        }
+        if ("fields".equalsIgnoreCase(mode)) {
+            Object projected = projectFields(vo, schema);
+            if (projected != null) {
+                return projected;
+            }
+        }
+        return buildLegacyPublicOutput(vo);
+    }
+
+    private Object lastStepOutput(ExecutionVO vo) {
+        List<ExecutionNodeLog> logs = vo.getLogs() == null ? List.of() : vo.getLogs();
+        List<ExecutionNodeLog> successLogs = logs.stream()
+                .filter(log -> "SUCCESS".equals(log.getStatus()))
+                .toList();
+        List<ExecutionNodeLog> source = successLogs.isEmpty() ? logs : successLogs;
+        if (source.isEmpty()) {
+            Map<String, Object> byNodeId = DbResultCleaner.stripMap(parseObjectMap(vo.getInstance().getOutputResult()));
+            if (byNodeId.isEmpty()) {
+                return null;
+            }
+            return byNodeId.values().stream().reduce((a, b) -> b).orElse(null);
+        }
+        ExecutionNodeLog last = source.get(source.size() - 1);
+        Map<String, Object> byNodeId = DbResultCleaner.stripMap(parseObjectMap(vo.getInstance().getOutputResult()));
+        if (StringUtils.hasText(last.getNodeId()) && byNodeId.containsKey(last.getNodeId())) {
+            return byNodeId.get(last.getNodeId());
+        }
+        return DbResultCleaner.stripRedundant(parseJson(last.getResponseBody()));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object projectFields(ExecutionVO vo, Map<String, Object> schema) {
+        Object rawFields = schema.get("fields");
+        if (!(rawFields instanceof List<?> list) || list.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> byNodeId = DbResultCleaner.stripMap(parseObjectMap(vo.getInstance().getOutputResult()));
+        if (byNodeId.isEmpty()) {
+            for (ExecutionNodeLog log : vo.getLogs() == null ? List.<ExecutionNodeLog>of() : vo.getLogs()) {
+                if (StringUtils.hasText(log.getNodeId())) {
+                    byNodeId.put(log.getNodeId(), DbResultCleaner.stripRedundant(parseJson(log.getResponseBody())));
+                }
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) {
+                continue;
+            }
+            String key = stringVal(map.get("key"));
+            String fromNode = stringVal(map.get("fromNode"));
+            String fromPath = stringVal(map.get("fromPath"));
+            if (!StringUtils.hasText(key) || !StringUtils.hasText(fromNode)) {
+                continue;
+            }
+            Object source = byNodeId.get(fromNode);
+            Object value = StringUtils.hasText(fromPath) ? JsonPaths.get(source, fromPath) : source;
+            result.put(key, value);
+        }
+        return result.isEmpty() ? null : result;
     }
 
     /**
      * 开放网关优先用实例业务 output（DB 含 rows），避免节点日志里的 preview 截断视图。
+     * 无 outputSchema 时保持历史行为。
      */
-    private Object buildPublicOutput(ExecutionVO vo) {
+    private Object buildLegacyPublicOutput(ExecutionVO vo) {
         Map<String, Object> byNodeId = DbResultCleaner.stripMap(parseObjectMap(vo.getInstance().getOutputResult()));
         if (!byNodeId.isEmpty()) {
             if (byNodeId.size() == 1) {
@@ -131,6 +207,35 @@ public class ExecutionResultAssembler {
         return byName;
     }
 
+    private Map<String, Object> resolveOutputSchema(ExecutionInstance instance) {
+        if (instance == null) {
+            return null;
+        }
+        String json = null;
+        if (instance.getSnapshotId() != null) {
+            WorkflowSnapshot snapshot = workflowSnapshotService.getById(instance.getSnapshotId());
+            if (snapshot != null) {
+                json = snapshot.getOutputSchema();
+            }
+        }
+        if (!StringUtils.hasText(json) && instance.getWorkflowId() != null) {
+            Workflow workflow = workflowService.getById(instance.getWorkflowId());
+            if (workflow != null) {
+                json = workflow.getOutputSchema();
+            }
+        }
+        if (!StringUtils.hasText(json)) {
+            return null;
+        }
+        Object parsed = parseJson(json);
+        if (parsed instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((k, v) -> result.put(String.valueOf(k), v));
+            return result;
+        }
+        return null;
+    }
+
     private Map<String, Object> parseObjectMap(String json) {
         Object parsed = parseJson(json);
         if (parsed instanceof Map<?, ?> map) {
@@ -151,5 +256,9 @@ public class ExecutionResultAssembler {
         } catch (Exception ignored) {
             return json;
         }
+    }
+
+    private static String stringVal(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 }

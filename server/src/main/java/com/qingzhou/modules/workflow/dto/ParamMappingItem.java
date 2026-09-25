@@ -19,4 +19,9 @@ public class ParamMappingItem {
 
     @NotBlank(message = "toPath 不能为空")
     private String toPath;
+
+    /**
+     * 取值来源：output（默认，前序响应）/ request（前序请求 payload）/ input（与 fromNode=__input__ 等价）。
+     */
+    private String fromSource;
 }

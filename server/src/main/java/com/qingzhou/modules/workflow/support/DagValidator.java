@@ -17,9 +17,11 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * DAG 合法性：节点 ID 唯一、边端点存在、无闭环、参数映射指向已有节点。
+ * DAG 合法性：节点 ID 唯一、边端点存在、无闭环、参数映射指向已有节点（允许虚拟源 __input__）。
  */
 public final class DagValidator {
+
+    private static final String INPUT_SOURCE_NODE = "__input__";
 
     private DagValidator() {
     }
@@ -71,7 +73,15 @@ public final class DagValidator {
             if (mapping == null) {
                 continue;
             }
-            if (!nodeIds.contains(mapping.getFromNode()) || !nodeIds.contains(mapping.getToNode())) {
+            if (!StringUtils.hasText(mapping.getToNode()) || !nodeIds.contains(mapping.getToNode())) {
+                throw new BizException(ResultCode.BAD_REQUEST,
+                        "参数映射引用了不存在的目标节点: " + mapping.getToNode());
+            }
+            if (INPUT_SOURCE_NODE.equals(mapping.getFromNode())
+                    || "input".equalsIgnoreCase(mapping.getFromSource())) {
+                continue;
+            }
+            if (!StringUtils.hasText(mapping.getFromNode()) || !nodeIds.contains(mapping.getFromNode())) {
                 throw new BizException(ResultCode.BAD_REQUEST,
                         "参数映射引用了不存在的节点: " + mapping.getFromNode() + " -> " + mapping.getToNode());
             }
