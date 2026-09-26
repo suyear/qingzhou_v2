@@ -16,6 +16,6 @@ public class OpenApiExecuteResultVO {
     private String status;
     private Long durationMs;
     private String errorMsg;
-    /** 业务输出；单节点时直接为该节点结果，多节点时为 { 节点名: 结果 } */
+    /** 业务输出：由工作流 outputSchema 投影，与试用 / 详情 publicOutput 同形态 */
     private Object output;
 }

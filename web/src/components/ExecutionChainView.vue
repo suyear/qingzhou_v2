@@ -98,6 +98,8 @@
       :workflow-id="chain.workflow?.id"
       :workflow-name="chain.workflow?.name"
       :highlight-node-id="chain.failedNodeId"
+      :public-output="chain.publicOutput"
+      public-output-hint="与开放 API data.output 同形态"
     />
   </div>
 </template>

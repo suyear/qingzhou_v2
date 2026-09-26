@@ -52,7 +52,9 @@
       </el-radio-group>
       <p class="tip">
         外层 <code>{ code, message, data }</code>；业务在 <code>data.output</code>；无编排 <code>steps</code>。
-        DB 查询结果为 <code>rows</code>（不是执行日志里的 <code>preview</code>）。
+        工作流的 <code>data.output</code> 形态由设计器「出参」决定：
+        完整结果 / 查询首行（<code>rows[0]</code>）/ 字段投影。
+        不一定是下方 DB 整包示例。
         组件调用无 <code>executionId</code> / <code>executionNo</code>。
       </p>
       <DetailCodeBlock

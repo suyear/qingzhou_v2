@@ -28,4 +28,18 @@ class DbResultCleanerTest {
         assertFalse(node.containsKey("columns"));
         assertTrue(node.containsKey("rows"));
     }
+
+    @Test
+    void promotesPreviewToRows() {
+        Map<String, Object> raw = Map.of(
+                "rowCount", 1,
+                "preview", List.of(Map.of("id", 1)),
+                "truncated", false
+        );
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cleaned = (Map<String, Object>) DbResultCleaner.stripRedundant(raw);
+        assertTrue(cleaned.containsKey("rows"));
+        assertFalse(cleaned.containsKey("preview"));
+        assertEquals(1, ((List<?>) cleaned.get("rows")).size());
+    }
 }

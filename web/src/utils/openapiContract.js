@@ -1,22 +1,24 @@
 /**
  * 开放平台对外契约：文档 / curl / 试调共用同一份示例。
- * 字段须与真实网关 R<OpenApiExecuteResultVO> 一致（DB 结果为 rows，不是 preview）。
+ * 字段须与真实网关 R<OpenApiExecuteResultVO> 一致（DB 业务键为 rows，不是 preview）。
+ * 工作流若配置「查询首行」，data.output 则为单行对象而非整包。
  */
 export const OPENAPI_DEMO_INPUT = { userId: '1' }
 
-/** 与 OPENAPI_DEMO_INPUT 对应的业务 output（清理后的 DB 查询形态） */
+/** 与 OPENAPI_DEMO_INPUT 对应：查询首行形态（按 ID 查用户常见） */
 export const OPENAPI_DEMO_OUTPUT = {
+  id: 1,
+  username: 'admin',
+  display_name: '系统管理员',
+  role: 'ADMIN',
+  status: 1,
+}
+
+/** 未做首行/字段投影时的 DB 完整结果示例 */
+export const OPENAPI_DEMO_OUTPUT_DB_FULL = {
   rowCount: 1,
   affectedRows: 0,
-  rows: [
-    {
-      id: 1,
-      username: 'admin',
-      display_name: '系统管理员',
-      role: 'ADMIN',
-      status: 1,
-    },
-  ],
+  rows: [OPENAPI_DEMO_OUTPUT],
   truncated: false,
 }
 
@@ -44,7 +46,7 @@ export function openapiWorkflowSuccessSample(output = OPENAPI_DEMO_OUTPUT) {
 }
 
 /** 组件成功：无执行实例字段，与网关真实返回一致 */
-export function openapiComponentSuccessSample(output = OPENAPI_DEMO_OUTPUT) {
+export function openapiComponentSuccessSample(output = OPENAPI_DEMO_OUTPUT_DB_FULL) {
   return {
     code: 0,
     message: 'ok',
@@ -56,10 +58,10 @@ export function openapiComponentSuccessSample(output = OPENAPI_DEMO_OUTPUT) {
   }
 }
 
-export function openapiSuccessSampleText(kind = 'workflow', output = OPENAPI_DEMO_OUTPUT) {
+export function openapiSuccessSampleText(kind = 'workflow', output) {
   const sample = kind === 'component'
-    ? openapiComponentSuccessSample(output)
-    : openapiWorkflowSuccessSample(output)
+    ? openapiComponentSuccessSample(output ?? OPENAPI_DEMO_OUTPUT_DB_FULL)
+    : openapiWorkflowSuccessSample(output ?? OPENAPI_DEMO_OUTPUT)
   return JSON.stringify(sample, null, 2)
 }
 

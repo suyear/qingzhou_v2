@@ -85,19 +85,52 @@ public class ExecutionResultAssembler {
                 .build();
     }
 
-    Object projectPublicOutput(ExecutionVO vo) {
+    public Object projectPublicOutput(ExecutionVO vo) {
         Map<String, Object> schema = resolveOutputSchema(vo.getInstance());
         String mode = schema == null ? "" : String.valueOf(schema.getOrDefault("mode", "")).trim();
-        if ("last".equalsIgnoreCase(mode)) {
+        // 无 schema / 未识别 mode：默认最后一步，避免历史 NULL 静默变多节点大包
+        if (!StringUtils.hasText(mode) || "last".equalsIgnoreCase(mode)) {
             return lastStepOutput(vo);
+        }
+        if ("firstRow".equalsIgnoreCase(mode) || "first_row".equalsIgnoreCase(mode)) {
+            return firstRowOutput(vo);
         }
         if ("fields".equalsIgnoreCase(mode)) {
             Object projected = projectFields(vo, schema);
             if (projected != null) {
                 return projected;
             }
+            // 已配置 fields 但全部无效：返回空对象，禁止静默变成「最后一步」
+            Object rawFields = schema.get("fields");
+            if (rawFields instanceof List<?> list && !list.isEmpty()) {
+                return new LinkedHashMap<>();
+            }
+            return lastStepOutput(vo);
         }
-        return buildLegacyPublicOutput(vo);
+        if ("legacy".equalsIgnoreCase(mode)) {
+            return buildLegacyPublicOutput(vo);
+        }
+        return lastStepOutput(vo);
+    }
+
+    /**
+     * 查询首行：末步若为 DB 结果（含 rows），返回 rows[0]；无行则 null；非 DB 形态回落完整末步结果。
+     */
+    @SuppressWarnings("unchecked")
+    private Object firstRowOutput(ExecutionVO vo) {
+        Object last = lastStepOutput(vo);
+        if (!(last instanceof Map<?, ?> map)) {
+            return last;
+        }
+        Object rows = map.get("rows");
+        if (!(rows instanceof List<?> list)) {
+            return last;
+        }
+        if (list.isEmpty()) {
+            return null;
+        }
+        Object first = list.get(0);
+        return DbResultCleaner.stripRedundant(first);
     }
 
     private Object lastStepOutput(ExecutionVO vo) {

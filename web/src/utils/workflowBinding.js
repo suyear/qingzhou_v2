@@ -8,7 +8,7 @@ const META_KEYS = new Set([
   'provider', 'category', 'sqlPreview', 'customFields',
 ])
 
-const UPSTREAM_PRESETS = ['errcode', 'errmsg', 'chatid', 'userid', 'id', 'msgid', 'access_token', 'data']
+const UPSTREAM_PRESETS = [] // 保留占位；无 responseSchema 时不再塞假字段
 
 const KEY_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
@@ -37,9 +37,54 @@ export function fieldLabel(field) {
 export function responseFieldOptions(component) {
   const schema = parseJson(component?.responseSchema, {})
   const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {}
-  const keys = Object.keys(properties)
-  if (keys.length) return keys
-  return UPSTREAM_PRESETS
+  return Object.keys(properties)
+}
+
+/** 从实际响应体抽顶层字段，供出参 / 取数据补全选项 */
+export function topLevelKeysFromPayload(payload) {
+  if (payload == null) return []
+  let obj = payload
+  if (typeof payload === 'string') {
+    obj = parseJson(payload, null)
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return []
+  const keys = Object.keys(obj).filter((key) => key && !String(key).startsWith('_'))
+  // 历史 DB 日志用 preview；业务输出是 rows —— 学习时统一成 rows
+  const normalized = keys.map((key) => (key === 'preview' ? 'rows' : key))
+  return [...new Set(normalized)].filter((key) => key !== 'preview')
+}
+
+/** 从 rows[0] / preview[0] 展开列路径，便于出参取第一行某列 */
+export function rowColumnPathsFromPayload(payload) {
+  if (payload == null) return []
+  let obj = payload
+  if (typeof payload === 'string') {
+    obj = parseJson(payload, null)
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return []
+  const rows = Array.isArray(obj.rows) ? obj.rows : (Array.isArray(obj.preview) ? obj.preview : null)
+  if (!rows?.length) return []
+  const first = rows[0]
+  if (!first || typeof first !== 'object' || Array.isArray(first)) return []
+  return Object.keys(first)
+    .filter((key) => key && !String(key).startsWith('_'))
+    .slice(0, 40)
+    .map((key) => `rows[0].${key}`)
+}
+
+/** 展示用：历史 preview 升格为 rows，与开放 API 一致 */
+export function normalizePayloadForDisplay(payload) {
+  let obj = payload
+  if (typeof payload === 'string') {
+    obj = parseJson(payload, null)
+    if (obj == null) return payload
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj
+  if (!('preview' in obj)) return obj
+  const next = { ...obj }
+  if (!('rows' in next)) next.rows = next.preview
+  delete next.preview
+  return next
 }
 
 export function customFieldsFromData(nodeData) {
@@ -82,7 +127,10 @@ export function inferBindingsForNode(nodeId, fields, nodeData, mappings, inputKe
         key,
         mode: 'upstream',
         fromNode: mapping.fromNode,
-        fromField: pathToKey(mapping.fromPath),
+        fromField: (() => {
+          const p = pathToKey(mapping.fromPath)
+          return p ? p : '__whole__'
+        })(),
         fromSource: mapping.fromSource === 'request' ? 'request' : 'output',
         value: '',
       }
@@ -127,9 +175,10 @@ export function bindingsToMappings(bindingsByNode) {
   for (const [nodeId, bindings] of Object.entries(bindingsByNode || {})) {
     for (const item of bindings || []) {
       if (item.mode === 'upstream' && item.fromNode && item.fromField) {
+        const whole = item.fromField === '__whole__' || item.fromField === '*'
         mappings.push({
           fromNode: item.fromNode,
-          fromPath: keyToPath(item.fromField),
+          fromPath: whole ? '' : keyToPath(item.fromField),
           toNode: nodeId,
           toPath: keyToPath(item.key),
           fromSource: item.fromSource === 'request' ? 'request' : 'output',
@@ -265,16 +314,14 @@ export function defaultBinding(field, upstreamNodes) {
     }
     return binding
   }
-  const matchedUpstream = (upstreamNodes || []).find((node) =>
-    (node.fields || []).includes(field.key),
-  )
-  if (matchedUpstream) {
+  const matched = findUpstreamFieldMatch(upstreamNodes, field.key)
+  if (matched) {
     return {
       key: field.key,
       mode: 'upstream',
-      fromNode: matchedUpstream.id,
-      fromField: field.key,
-      fromSource: 'output',
+      fromNode: matched.nodeId,
+      fromField: matched.field,
+      fromSource: matched.fromSource,
       value: '',
     }
   }
@@ -283,6 +330,56 @@ export function defaultBinding(field, upstreamNodes) {
     binding.inputKey = field.key
   }
   return binding
+}
+
+/** 在上游节点字段中找同名（忽略大小写）或常见 id 别名 */
+export function findUpstreamFieldMatch(upstreamNodes, fieldKey) {
+  const key = String(fieldKey || '').trim()
+  if (!key || !upstreamNodes?.length) return null
+  const lower = key.toLowerCase()
+  for (const node of upstreamNodes) {
+    const responseFields = node.responseFields || node.fields || []
+    const requestFields = node.requestFields || []
+    for (const name of responseFields) {
+      if (String(name).toLowerCase() === lower) {
+        return { nodeId: node.id, field: name, fromSource: 'output' }
+      }
+    }
+    for (const name of requestFields) {
+      if (String(name).toLowerCase() === lower) {
+        return { nodeId: node.id, field: name, fromSource: 'request' }
+      }
+    }
+  }
+  // userId / order_id → 上游 id / rows[0].id
+  if (/Id$/i.test(key) || /_id$/i.test(key)) {
+    const last = upstreamNodes[upstreamNodes.length - 1]
+    const pool = [...(last.responseFields || last.fields || [])]
+    for (const candidate of ['id', 'rows[0].id']) {
+      if (pool.includes(candidate)) {
+        return { nodeId: last.id, field: candidate, fromSource: 'output' }
+      }
+    }
+  }
+  return null
+}
+
+/** 汇总本步对上游的依赖，供时间线展示 */
+export function collectUpstreamDeps(bindings, ctx = {}) {
+  const seen = new Set()
+  const deps = []
+  for (const binding of bindings || []) {
+    if (binding?.mode !== 'upstream' || !binding.fromNode) continue
+    if (seen.has(binding.fromNode)) continue
+    seen.add(binding.fromNode)
+    const fromIndex = ctx.nodeIndexes?.[binding.fromNode]
+    deps.push({
+      fromNode: binding.fromNode,
+      fromIndex: fromIndex || null,
+      label: fromIndex != null ? `← 第${fromIndex}步` : '← 上游',
+    })
+  }
+  return deps
 }
 
 export function bindingSummary(binding, field, ctx = {}) {
@@ -300,7 +397,9 @@ export function bindingSummary(binding, field, ctx = {}) {
     const stepIndex = ctx.nodeIndexes?.[binding.fromNode]
     const stepPrefix = stepIndex != null ? `第${stepIndex}步` : stepLabel
     const side = binding.fromSource === 'request' ? '请求' : '响应'
-    const key = binding.fromField || field?.key || ''
+    const key = binding.fromField === '__whole__' || binding.fromField === '*'
+      ? '完整结果'
+      : (binding.fromField || field?.key || '')
     return `来自${stepPrefix}·${side} ${key}`
   }
   if (binding.mode === 'runtime') {
@@ -312,33 +411,51 @@ export function bindingSummary(binding, field, ctx = {}) {
   return '未配置'
 }
 
-/** 规范化出参配置 */
-export function normalizeOutputSchema(raw) {
+/** 规范化出参配置。forPersist=true 时，空 fields 的投影落库为 last */
+export function normalizeOutputSchema(raw, options = {}) {
+  const forPersist = !!options.forPersist
   if (!raw || typeof raw !== 'object') {
     return { mode: 'last', fields: [] }
   }
-  const mode = raw.mode === 'fields' ? 'fields' : 'last'
+  let mode = 'last'
+  if (raw.mode === 'fields') mode = 'fields'
+  else if (raw.mode === 'firstRow' || raw.mode === 'first_row') mode = 'firstRow'
   const fields = Array.isArray(raw.fields)
     ? raw.fields
-      .filter((item) => item?.key && item?.fromNode && item?.fromPath)
-      .map((item) => ({
-        key: String(item.key).trim(),
-        fromNode: String(item.fromNode).trim(),
-        fromPath: String(item.fromPath).trim().startsWith('$')
-          ? String(item.fromPath).trim()
-          : keyToPath(item.fromPath),
-        description: item.description || '',
-      }))
+      .filter((item) => item?.key && item?.fromNode)
+      .map((item) => {
+        const rawPath = item.fromPath == null ? '' : String(item.fromPath).trim()
+        let fromPath = ''
+        if (rawPath && rawPath !== '$' && rawPath !== '*') {
+          fromPath = rawPath.startsWith('$') ? rawPath : keyToPath(rawPath)
+        }
+        return {
+          key: String(item.key).trim(),
+          fromNode: String(item.fromNode).trim(),
+          fromPath,
+          description: item.description || '',
+        }
+      })
     : []
+  // 仅持久化时把空投影收成 last；编辑态保留 fields 以便继续加字段
+  if (forPersist && mode === 'fields' && !fields.length) {
+    mode = 'last'
+  }
   return { mode, fields }
 }
 
 export function outputSchemaHint(schema) {
   const normalized = normalizeOutputSchema(schema)
-  if (normalized.mode === 'fields' && normalized.fields.length) {
-    return `已配置 ${normalized.fields.length} 个出参字段`
+  if (schema?.mode === 'fields' && !(schema.fields || []).length) {
+    return '字段投影尚未配置，对外将按「最后一步完整结果」返回'
   }
-  return '对外输出：最后一步完整结果'
+  if (normalized.mode === 'fields' && normalized.fields.length) {
+    return `对外出参：已投影 ${normalized.fields.length} 个字段（与开放 API 一致）`
+  }
+  if (normalized.mode === 'firstRow') {
+    return '对外出参：查询结果首行对象（与开放 API 一致）'
+  }
+  return '对外出参：最后一步完整结果（与开放 API 一致）'
 }
 
 export function stepConfigSummary(bindings, fields, ctx = {}) {

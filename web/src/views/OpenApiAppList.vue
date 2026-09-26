@@ -446,11 +446,12 @@
                 />
                 <DetailCodeBlock
                   class="mt12"
-                  title="业务输出 data.output（= 对外响应）"
+                  title="业务输出 data.output"
                   :value="invokeBusinessOutput"
-                  copy-message="已复制输出"
+                  copy-message="已复制 data.output"
                   max-height="280px"
                 />
+                <p v-if="invokeOutputMissing" class="hint mt12">本次响应无 data.output 字段（失败或非工作流结果时常见）</p>
                 <DetailCodeBlock
                   v-if="invokeGatewayEnvelope"
                   class="mt12"
@@ -692,12 +693,18 @@ const invokePayloadData = computed(() => {
 const invokeBusinessOutput = computed(() => {
   const data = invokePayloadData.value
   if (!data) {
-    return invokeResult.value?.response ?? ''
+    return null
   }
   if (Object.prototype.hasOwnProperty.call(data, 'output')) {
     return data.output
   }
-  return data
+  return null
+})
+
+const invokeOutputMissing = computed(() => {
+  const data = invokePayloadData.value
+  if (!data) return Boolean(invokeResult.value?.response)
+  return !Object.prototype.hasOwnProperty.call(data, 'output')
 })
 
 /** 网关真实返回体（去掉控制台 invoke 的 preview/httpStatus 包装） */

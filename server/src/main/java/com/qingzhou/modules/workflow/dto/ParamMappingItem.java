@@ -11,7 +11,9 @@ public class ParamMappingItem {
     @NotBlank(message = "fromNode 不能为空")
     private String fromNode;
 
-    @NotBlank(message = "fromPath 不能为空")
+    /**
+     * JSON Path；空或 "$" 表示取 fromNode 的完整对象（整步请求/响应）。
+     */
     private String fromPath;
 
     @NotBlank(message = "toNode 不能为空")

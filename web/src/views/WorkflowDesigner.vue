@@ -1,5 +1,5 @@
 <template>
-  <div class="designer">
+  <div v-loading="booting" class="designer" element-loading-text="加载编排器…">
     <PageState v-if="bootError" :error="bootError" @retry="retryBootstrap" />
     <template v-else>
     <div class="toolbar">
@@ -18,9 +18,17 @@
           <span class="step-pill" :class="{ active: allConfigured && form.status !== 'PUBLISHED', done: form.status === 'PUBLISHED' }">③ 试跑</span>
           <span class="step-pill" :class="{ active: form.status === 'PUBLISHED', done: form.status === 'PUBLISHED' }">④ 发布</span>
         </div>
-        <el-button :loading="running" @click="tryRun">试运行</el-button>
+        <el-tooltip :disabled="canTryRunAction" :content="tryRunBlockReason" placement="bottom">
+          <span class="tb-btn-wrap">
+            <el-button :loading="running" :disabled="!canTryRunAction" @click="tryRun">试运行</el-button>
+          </span>
+        </el-tooltip>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
-        <el-button type="primary" plain :loading="publishing" @click="publish">发布</el-button>
+        <el-tooltip :disabled="canPublishAction" :content="publishBlockReason" placement="bottom">
+          <span class="tb-btn-wrap">
+            <el-button type="primary" plain :loading="publishing" :disabled="!canPublishAction" @click="publish">发布</el-button>
+          </span>
+        </el-tooltip>
         <el-tag v-if="dirty" size="small" type="warning">未保存</el-tag>
         <span v-else-if="lastSavedAt" class="saved-hint">已保存 {{ lastSavedAt }}</span>
       </div>
@@ -47,14 +55,21 @@
         :all-step-sources="allStepSources"
         :input-fields="inputFields"
         :output-schema="outputSchema"
+        :workflow-status="form.status"
+        :workflow-dirty="dirty"
+        :last-step-name="lastStepSourceName"
+        :recent-public-output="runPublicOutput"
         :components="componentOptions"
-        :can-try-run="!canvasEmpty && allConfigured"
-        :can-publish="Boolean(route.params.id) && allConfigured"
+        :can-try-run="canTryRunAction"
+        :can-publish="canPublishAction"
+        :try-run-hint="tryRunBlockReason"
+        :publish-hint="publishBlockReason"
         :canvas-visible="canvasVisible"
         @select="selectNode"
-        @add="addToChain"
+        @add="(item, opts) => addToChain(item, opts || {})"
         @remove="removeStep"
         @move="moveStep"
+        @auto-bind-upstream="autoBindUpstreamForSelected"
         @update-name="updateNodeName"
         @update-bindings="onBindingsChange"
         @update-input-fields="onInputFieldsUpdate"
@@ -67,7 +82,7 @@
       />
       <aside class="canvas-panel" :class="{ open: canvasVisible }">
         <div class="canvas-panel-head">
-          <span>流程图预览</span>
+          <span>流程图预览（只读）</span>
           <div class="canvas-head-actions">
             <span class="zoom-label">{{ zoomPercent }}%</span>
             <el-button-group size="small">
@@ -101,7 +116,7 @@
       </aside>
       <div v-if="!canvasEmpty" class="canvas-bar">
         <el-button size="small" :type="canvasVisible ? 'primary' : 'default'" @click="canvasVisible = !canvasVisible">
-          {{ canvasVisible ? '收起流程图' : '查看流程图' }}
+          {{ canvasVisible ? '收起流程图' : '流程图预览' }}
         </el-button>
       </div>
     </div>
@@ -163,6 +178,8 @@
         :execution-link="executionLink"
         :workflow-name="form.workflowName"
         :workflow-id="route.params.id"
+        :public-output="runPublicOutput"
+        :public-output-hint="runOutputHint"
       />
       <DetailEmpty v-else text="暂无试运行结果" />
     </el-drawer>
@@ -194,8 +211,9 @@
         <el-divider />
         <div class="hotkeys">
           <div class="settings-section-title">快捷操作</div>
-          <div>Delete：删除当前步骤</div>
-          <div>流程图：空白拖拽或双指滑动平移</div>
+          <div>⌘ / Ctrl + S：保存</div>
+          <div>Delete：删除当前选中步骤（输入框内无效）</div>
+          <div>流程图：空白拖拽或双指滑动平移（只读预览，调序请用左侧 ↑↓）</div>
           <div>流程图：捏合，或 Ctrl / ⌘ + 滚轮缩放</div>
         </div>
       </el-form>
@@ -226,6 +244,7 @@ import {
   bindingsToInputFields,
   bindingsToMappings,
   buildFieldMetaMap,
+  collectUpstreamDeps,
   defaultBinding,
   inferBindingsForNode,
   isNodeConfigured,
@@ -236,7 +255,9 @@ import {
   parseBindingValue,
   renameInputKeyInBindings,
   responseFieldOptions,
+  rowColumnPathsFromPayload,
   stepConfigSummary,
+  topLevelKeysFromPayload,
 } from '@/utils/workflowBinding'
 import WorkflowStepEditor from '@/components/designer/WorkflowStepEditor.vue'
 import { NODE_SHAPE, registerComponentNode } from '@/components/designer/registerNodes'
@@ -254,15 +275,18 @@ const saving = ref(false)
 const publishing = ref(false)
 const running = ref(false)
 const bootError = ref('')
+const booting = ref(true)
 const logVisible = ref(false)
 const tryRunDialogVisible = ref(false)
 const publishSuccessVisible = ref(false)
 const runResult = ref(null)
+const runPublicOutput = ref(null)
 const components = ref([])
 const credentials = ref([])
 const paramMappings = ref([])
 const inputFields = ref([])
 const outputSchema = ref({ mode: 'last', fields: [] })
+const learnedResponseFields = ref({})
 const nodeBindings = ref({})
 const tryRunInput = ref('{}')
 const tryRunForm = ref({})
@@ -322,6 +346,7 @@ const chainNodes = computed(() => {
     const fields = fieldsForNode(node)
     const bindings = nodeBindings.value[node.id] || []
     const requiredCount = fields.filter((item) => item.required).length
+    const deps = collectUpstreamDeps(bindings, { nodeIndexes })
     return {
       id: node.id,
       name: data.componentName || node.id,
@@ -330,6 +355,7 @@ const chainNodes = computed(() => {
       configured: isNodeConfigured(bindings, fields),
       fieldCount: requiredCount,
       summaryLines: stepConfigSummary(bindings, fields, { nodeNames, nodeIndexes, inputLabels }),
+      deps,
     }
   })
 })
@@ -349,7 +375,32 @@ const upstreamSourcesForSelected = computed(() => {
 })
 const tryRunFields = computed(() => inputFields.value)
 const outputHint = computed(() => outputSchemaHint(outputSchema.value))
+const lastStepSourceName = computed(() => {
+  const steps = allStepSources.value
+  if (!steps.length) return ''
+  return steps[steps.length - 1]?.name || ''
+})
+const runOutputHint = computed(() => {
+  const status = runResult.value?.instance?.status
+  if (status && status !== 'SUCCESS') {
+    return '本次未全部成功；右侧为已产出部分的投影（若有），勿当作正式对外结果'
+  }
+  return outputHint.value
+})
 const allConfigured = computed(() => chainNodes.value.length > 0 && chainNodes.value.every((item) => item.configured))
+const canTryRunAction = computed(() => !canvasEmpty.value && allConfigured.value)
+const canPublishAction = computed(() => Boolean(route.params.id) && allConfigured.value)
+const tryRunBlockReason = computed(() => {
+  if (canvasEmpty.value) return '请先添加至少一个步骤'
+  if (!allConfigured.value) return '还有步骤参数未配置完'
+  return ''
+})
+const publishBlockReason = computed(() => {
+  if (!route.params.id) return '请先保存工作流，再发布'
+  if (canvasEmpty.value) return '请先添加至少一个步骤'
+  if (!allConfigured.value) return '还有步骤参数未配置完'
+  return ''
+})
 const form = reactive({
   workflowName: '未命名工作流',
   workflowCode: `wf_${Date.now()}`,
@@ -509,14 +560,7 @@ function createGraph() {
   graph.use(new Selection({ enabled: true, rubberband: false, showNodeSelectionBox: false }))
   graph.on('scale', syncZoomPercent)
   graph.use(new Keyboard({ enabled: true }))
-  graph.bindKey(['backspace', 'delete'], () => {
-    if (!selectedId.value) return false
-    const id = selectedId.value
-    askConfirm('删除当前步骤？未保存的参数配置会一起丢掉。', '删除步骤').then((ok) => {
-      if (ok) removeStep(id)
-    })
-    return false
-  })
+  // Delete 由页面级快捷键处理，避免与表单输入冲突
   graph.on('node:added', ({ node }) => {
     nodeTick.value += 1
     if (node) ensureBindings(node)
@@ -536,8 +580,7 @@ function createGraph() {
   })
   graph.on('edge:connected', ({ edge }) => {
     const targetId = edge?.getTargetCellId?.()
-    const target = targetId ? graph.getCellById(targetId) : null
-    if (target) buildBindingsForNode(target, true)
+    if (targetId) sanitizeUpstreamBindings(targetId)
     markDirty()
   })
   graph.on('edge:removed', markDirty)
@@ -600,12 +643,39 @@ function buildStepSource(node) {
       requestFields.push(binding.key)
     }
   }
+  const schemaFields = responseFieldOptions(findComponent(data))
+  const learned = learnedResponseFields.value[node.id] || []
+  const responseFields = [...new Set([...schemaFields, ...learned])]
   return {
     id: node.id,
     name: data.componentName || node.id,
     requestFields,
-    responseFields: responseFieldOptions(findComponent(data)),
+    responseFields,
+    hasResponseSchema: schemaFields.length > 0,
   }
+}
+
+function learnResponseFieldsFromLogs(logs) {
+  if (!Array.isArray(logs) || !logs.length) return 0
+  const next = { ...learnedResponseFields.value }
+  let added = 0
+  for (const log of logs) {
+    const nodeId = log.nodeId || log.id
+    if (!nodeId) continue
+    const body = log.responseBody ?? log.response
+    const keys = [
+      ...topLevelKeysFromPayload(body),
+      ...rowColumnPathsFromPayload(body),
+    ]
+    if (!keys.length) continue
+    const prev = next[nodeId] || []
+    const merged = [...new Set([...prev, ...keys])]
+    if (merged.length > prev.length) added += merged.length - prev.length
+    next[nodeId] = merged
+  }
+  learnedResponseFields.value = next
+  if (added > 0) nodeTick.value += 1
+  return added
 }
 
 function getUpstreamNodes(nodeId) {
@@ -624,6 +694,8 @@ function buildBindingsForNode(node, force = false) {
     return {
       id: item.id,
       fields: [...new Set([...(source.responseFields || []), ...(source.requestFields || [])])],
+      responseFields: source.responseFields || [],
+      requestFields: source.requestFields || [],
     }
   })
   nodeBindings.value = {
@@ -667,26 +739,32 @@ function selectNode(nodeId) {
   nextTick(() => graph.centerCell(node))
 }
 
-function addToChain(item) {
+function addToChain(item, options = {}) {
   if (!graph) return
-  const nodes = getOrderedNodes()
-  const last = nodes[nodes.length - 1]
+  const before = getOrderedNodes()
+  let insertAt = before.length
+  if (options.append) {
+    insertAt = before.length
+  } else if (options.afterId) {
+    const idx = before.findIndex((node) => node.id === options.afterId)
+    insertAt = idx >= 0 ? idx + 1 : before.length
+  } else if (selectedId.value) {
+    const idx = before.findIndex((node) => node.id === selectedId.value)
+    insertAt = idx >= 0 ? idx + 1 : before.length
+  }
+
   const node = graph.addNode({
     shape: NODE_SHAPE,
-    x: 80 + nodes.length * 320,
+    x: 80 + insertAt * 320 + 40,
     y: 100,
     data: toNodeData(item),
   })
-  if (last) {
-    graph.addEdge({
-      source: { cell: last.id, port: 'out' },
-      target: { cell: node.id, port: 'in' },
-      attrs: {
-        line: { stroke: '#64748b', strokeWidth: 1.6, targetMarker: { name: 'block', width: 8, height: 8 } },
-      },
-    })
-  }
-  nodeTick.value += 1
+  const reordered = [...before]
+  reordered.splice(insertAt, 0, node)
+  reordered.forEach((cell, idx) => {
+    cell.position(80 + idx * 320, 100)
+  })
+  relayoutChain()
   buildBindingsForNode(node, true)
   refreshInputFieldsFromBindings()
   selectNode(node.id)
@@ -694,19 +772,80 @@ function addToChain(item) {
   if (canvasVisible.value) {
     nextTick(() => refreshCanvasView(true))
   }
+  const tip = insertAt < before.length
+    ? `已插入为第 ${insertAt + 1} 步（共 ${reordered.length} 步）`
+    : `已添加为第 ${reordered.length} 步`
+  ElMessage.success(tip)
+  if (before.length > 0) {
+    ElMessage.info({ message: '已按同名尝试从上游取值；可在「取数据」中调整', duration: 2500 })
+  }
 }
 
 async function removeStep(nodeId) {
   const node = graph?.getCellById(nodeId)
   if (!node) return
+  const ordered = getOrderedNodes()
+  const index = ordered.findIndex((item) => item.id === nodeId)
   graph.removeNode(nodeId)
+  // 清理指向已删步骤的出参投影
+  const kept = (outputSchema.value.fields || []).filter((row) => row?.fromNode !== nodeId)
+  if (kept.length !== (outputSchema.value.fields || []).length) {
+    outputSchema.value = {
+      ...outputSchema.value,
+      fields: kept,
+      mode: outputSchema.value.mode === 'fields' && !kept.length ? 'last' : outputSchema.value.mode,
+    }
+  }
+  // 清理映射
+  paramMappings.value = paramMappings.value.filter(
+    (item) => item.fromNode !== nodeId && item.toNode !== nodeId,
+  )
+  const nextBindings = { ...nodeBindings.value }
+  delete nextBindings[nodeId]
+  nodeBindings.value = nextBindings
+  let broken = 0
+  for (const n of getOrderedNodes()) {
+    broken += sanitizeUpstreamBindings(n.id)
+  }
   relayoutChain()
+  const remaining = getOrderedNodes()
   if (selectedId.value === nodeId) {
-    const next = getOrderedNodes()[0]
-    if (next) selectNode(next.id)
+    const neighbor = remaining[Math.min(Math.max(index, 0), Math.max(remaining.length - 1, 0))]
+    if (neighbor) selectNode(neighbor.id)
     else clearSelection()
   }
   markDirty()
+  ElMessage.success('已删除步骤')
+  if (broken > 0) {
+    ElMessage.warning(`有 ${broken} 处参数失去上游来源，请重新配置取数据`)
+  }
+}
+
+/** 调序/删步后：仅修正失效的上游引用，保留其余已配参数。返回失效条数。 */
+function sanitizeUpstreamBindings(nodeId) {
+  const bindings = nodeBindings.value[nodeId]
+  if (!Array.isArray(bindings) || !bindings.length) return 0
+  const upstreamIds = new Set(getUpstreamNodes(nodeId).map((item) => item.id))
+  let broken = 0
+  const next = bindings.map((binding) => {
+    if (binding?.mode === 'upstream' && binding.fromNode && !upstreamIds.has(binding.fromNode)) {
+      broken += 1
+      return {
+        ...binding,
+        mode: 'fixed',
+        value: '',
+        fromNode: '',
+        fromField: '',
+        fromSource: '',
+        inputKey: '',
+      }
+    }
+    return binding
+  })
+  if (broken > 0) {
+    nodeBindings.value = { ...nodeBindings.value, [nodeId]: next }
+  }
+  return broken
 }
 
 function moveStep(nodeId, direction) {
@@ -720,10 +859,26 @@ function moveStep(nodeId, direction) {
     item.position(80 + idx * 320, 100)
   })
   relayoutChain()
-  buildBindingsForNode(swapped[target], true)
-  buildBindingsForNode(swapped[index], true)
+  let broken = 0
+  for (const n of getOrderedNodes()) {
+    broken += sanitizeUpstreamBindings(n.id)
+  }
   selectNode(nodeId)
   markDirty()
+  ElMessage.success(direction < 0 ? '已上移一步' : '已下移一步')
+  if (broken > 0) {
+    ElMessage.warning(`有 ${broken} 处参数失去上游来源，请重新配置`)
+  }
+}
+
+function autoBindUpstreamForSelected() {
+  if (!selectedId.value || !graph) return
+  const node = graph.getCellById(selectedId.value)
+  if (!node) return
+  buildBindingsForNode(node, true)
+  refreshInputFieldsFromBindings()
+  markDirty()
+  ElMessage.success('已按同名/常见别名尝试绑定上游')
 }
 
 function onBindingsChange(bindings) {
@@ -789,6 +944,8 @@ function onAddCustomField(field) {
     return {
       id: item.id,
       fields: [...new Set([...(source.responseFields || []), ...(source.requestFields || [])])],
+      responseFields: source.responseFields || [],
+      requestFields: source.requestFields || [],
     }
   })
   const bindings = [...(nodeBindings.value[selectedId.value] || [])]
@@ -969,13 +1126,18 @@ async function save() {
   syncBindingsToPayload()
   saving.value = true
   try {
+    const persistedOutput = normalizeOutputSchema(outputSchema.value, { forPersist: true })
     const payload = {
       workflowCode: form.workflowCode,
       workflowName: form.workflowName,
       graph: toBackendGraph(),
-      paramMapping: paramMappings.value.filter((item) => item.fromNode && item.toNode && item.fromPath && item.toPath),
+      paramMapping: paramMappings.value.filter((item) => {
+        if (!item?.fromNode || !item?.toNode || !item?.toPath) return false
+        // fromPath 允许空字符串：表示取上游整步结果
+        return item.fromPath != null
+      }),
       inputSchema: fieldsToSchema(inputFields.value),
-      outputSchema: normalizeOutputSchema(outputSchema.value),
+      outputSchema: persistedOutput,
       credentialMode: form.credentialMode,
       credentialId: form.credentialMode === 'INDEPENDENT' ? form.credentialId : null,
     }
@@ -987,6 +1149,8 @@ async function save() {
     lastSavedAt.value = formatTime(new Date())
     pauseDirty()
     applyMeta(res.data)
+    // 与落库一致：空 fields 收成 last 后回写本地
+    outputSchema.value = persistedOutput
     await resumeClean()
     if (!id && res.data?.id) {
       await router.replace(`/designer/${res.data.id}`)
@@ -1081,10 +1245,6 @@ async function tryRun() {
     }
   }
   const fields = tryRunFields.value
-  if (!fields.length) {
-    await confirmTryRun()
-    return
-  }
   tryRunForm.value = Object.fromEntries(fields.map((item) => [item.key, '']))
   tryRunInput.value = '{}'
   tryRunDialogVisible.value = true
@@ -1132,19 +1292,49 @@ async function confirmTryRun() {
     const res = await tryRunWorkflow(route.params.id, { input })
     tryRunDialogVisible.value = false
     const slim = res.data || {}
+    runPublicOutput.value = slim.output !== undefined ? slim.output : null
+    let learned = 0
     if (slim.executionId) {
       try {
         const detail = await getExecution(slim.executionId)
         runResult.value = detail.data
+        if (detail.data?.publicOutput !== undefined && detail.data?.publicOutput !== null) {
+          runPublicOutput.value = detail.data.publicOutput
+        }
+        learned = learnResponseFieldsFromLogs(detail.data?.logs || slim.steps || [])
       } catch {
-        runResult.value = null
+        runResult.value = {
+          instance: {
+            status: slim.status,
+            executionNo: slim.executionNo,
+            durationMs: slim.durationMs,
+            errorMsg: slim.errorMsg,
+            inputParams: input,
+            outputResult: null,
+          },
+          logs: (slim.steps || []).map((step) => ({
+            nodeId: step.nodeId,
+            nodeName: step.nodeName,
+            componentCode: step.componentCode,
+            status: step.status,
+            durationMs: step.durationMs,
+            errorMsg: step.errorMsg,
+            responseBody: step.response,
+          })),
+          publicOutput: slim.output,
+        }
+        learned = learnResponseFieldsFromLogs(slim.steps || [])
+        if (slim.output !== undefined) {
+          runPublicOutput.value = slim.output
+        }
       }
     } else {
       runResult.value = null
     }
     logVisible.value = true
     if (slim.status === 'SUCCESS') {
-      ElMessage.success(`试运行成功${slim.durationMs != null ? ` · ${slim.durationMs}ms` : ''}`)
+      const learnTip = learned > 0 ? ` · 已学习 ${learned} 个响应字段，可在「取数据」里选用` : ''
+      ElMessage.success(`试运行成功${slim.durationMs != null ? ` · ${slim.durationMs}ms` : ''} · ${outputHint.value}${learnTip}`)
     } else {
       ElMessage.warning(slim.errorMsg || '试运行结束（存在失败节点）')
     }
@@ -1155,37 +1345,42 @@ async function confirmTryRun() {
 
 async function bootstrap() {
   bootError.value = ''
+  booting.value = true
   ready = false
   hydrating = true
-  const [list, creds] = await Promise.all([
-    pageComponents({ current: 1, size: 100 }),
-    pageCredentials({ current: 1, size: 100 }),
-  ])
-  components.value = list.data?.records || []
-  credentials.value = (creds.data?.records || []).filter((item) => item.status === 1 && item.credentialType === 'WECOM')
-  await nextTick()
-  createGraph()
-  resizeGraphCanvas()
-  syncZoomPercent()
-  nodeTick.value += 1
-  if (route.params.id) {
-    const detail = await getWorkflow(route.params.id)
-    const wf = detail.data || {}
-    applyMeta(wf)
-    restoreGraph(wf.graph)
-    paramMappings.value = (wf.paramMapping || []).map((item) => ({ ...item }))
-    inputFields.value = schemaToFields(wf.inputSchema)
-    outputSchema.value = normalizeOutputSchema(wf.outputSchema)
-    initBindingsFromWorkflow(wf.paramMapping, wf.inputSchema)
-    refreshInputFieldsFromBindings()
+  try {
+    const [list, creds] = await Promise.all([
+      pageComponents({ current: 1, size: 100 }),
+      pageCredentials({ current: 1, size: 100 }),
+    ])
+    components.value = list.data?.records || []
+    credentials.value = (creds.data?.records || []).filter((item) => item.status === 1 && item.credentialType === 'WECOM')
+    await nextTick()
+    createGraph()
+    resizeGraphCanvas()
+    syncZoomPercent()
     nodeTick.value += 1
-    const first = chainNodes.value[0]
-    if (first) selectNode(first.id)
+    if (route.params.id) {
+      const detail = await getWorkflow(route.params.id)
+      const wf = detail.data || {}
+      applyMeta(wf)
+      restoreGraph(wf.graph)
+      paramMappings.value = (wf.paramMapping || []).map((item) => ({ ...item }))
+      inputFields.value = schemaToFields(wf.inputSchema)
+      outputSchema.value = normalizeOutputSchema(wf.outputSchema)
+      initBindingsFromWorkflow(wf.paramMapping, wf.inputSchema)
+      refreshInputFieldsFromBindings()
+      nodeTick.value += 1
+      const first = chainNodes.value[0]
+      if (first) selectNode(first.id)
+    }
+    hydrating = false
+    await nextTick()
+    markClean()
+    ready = true
+  } finally {
+    booting.value = false
   }
-  hydrating = false
-  await nextTick()
-  markClean()
-  ready = true
 }
 
 async function retryBootstrap() {
@@ -1219,6 +1414,30 @@ function onBeforeUnload(event) {
   }
   event.preventDefault()
   event.returnValue = ''
+}
+
+function isEditableTarget(target) {
+  if (!target) return false
+  const tag = String(target.tagName || '').toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+  if (target.isContentEditable) return true
+  return Boolean(target.closest?.('.el-input, .el-textarea, .el-select, [contenteditable="true"]'))
+}
+
+function onDesignerKeydown(event) {
+  const key = String(event.key || '')
+  if ((event.metaKey || event.ctrlKey) && key.toLowerCase() === 's') {
+    event.preventDefault()
+    if (!saving.value) save()
+    return
+  }
+  if (key === 'Delete' && !isEditableTarget(event.target) && selectedId.value) {
+    event.preventDefault()
+    const id = selectedId.value
+    askConfirm('删除当前步骤？未保存的参数配置会一起丢掉。', '删除步骤').then((ok) => {
+      if (ok) removeStep(id)
+    })
+  }
 }
 
 onBeforeRouteLeave(async () => {
@@ -1286,11 +1505,13 @@ function onWindowResize() {
 onMounted(() => {
   window.addEventListener('beforeunload', onBeforeUnload)
   window.addEventListener('resize', onWindowResize)
+  window.addEventListener('keydown', onDesignerKeydown)
   retryBootstrap()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload)
   window.removeEventListener('resize', onWindowResize)
+  window.removeEventListener('keydown', onDesignerKeydown)
   canvasResizeObserver?.disconnect()
   canvasResizeObserver = null
   if (canvasWrapEl) {
@@ -1329,6 +1550,9 @@ onBeforeUnmount(() => {
 .tb-mid {
   flex: 1;
   justify-content: center;
+}
+.tb-btn-wrap {
+  display: inline-flex;
 }
 .saved-hint {
   color: #16a34a;

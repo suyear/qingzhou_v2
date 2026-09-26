@@ -16,4 +16,6 @@ public class ExecutionChainVO {
     private TriggerSourceVO trigger;
     private String failedNodeId;
     private LineageVO lineage;
+    /** 与开放 API data.output 同形态的投影结果 */
+    private Object publicOutput;
 }

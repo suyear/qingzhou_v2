@@ -8,6 +8,7 @@ import java.util.Map;
 
 /**
  * 清洗 DB / 节点结果中的冗余字段（如与 rows 重复的 columns）。
+ * 历史日志里的 preview 统一升格为 rows，避免出参/学习踩空。
  */
 public final class DbResultCleaner {
 
@@ -28,6 +29,11 @@ public final class DbResultCleaner {
                 }
                 cleaned.put(key, stripRedundant(entry.getValue()));
             }
+            // preview → rows（仅当尚无 rows）
+            if (cleaned.containsKey("preview") && !cleaned.containsKey("rows")) {
+                cleaned.put("rows", cleaned.get("preview"));
+            }
+            cleaned.remove("preview");
             return cleaned;
         }
         if (value instanceof Collection<?> collection) {

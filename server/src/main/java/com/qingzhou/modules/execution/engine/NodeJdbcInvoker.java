@@ -108,7 +108,8 @@ public class NodeJdbcInvoker {
         Map<String, Object> logBody = new LinkedHashMap<>();
         logBody.put("rowCount", rows.size());
         logBody.put("affectedRows", 0);
-        logBody.put("preview", preview);
+        // 与业务 output 同用 rows 键，便于试跑学习 / 出参取数；内容为截断预览
+        logBody.put("rows", preview);
         logBody.put("truncated", truncated || rows.size() > DatabaseComponentSupport.PREVIEW_ROWS);
         return DbCallResult.okQuery(displayUrl, rows.size(), columns, logBody, output, truncated);
     }

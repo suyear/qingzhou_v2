@@ -14,6 +14,7 @@ import com.qingzhou.modules.execution.entity.ExecutionNodeLog;
 import com.qingzhou.modules.execution.mapper.ExecutionInstanceMapper;
 import com.qingzhou.modules.execution.service.ExecutionInstanceService;
 import com.qingzhou.modules.execution.service.ExecutionNodeLogService;
+import com.qingzhou.modules.execution.support.ExecutionResultAssembler;
 import com.qingzhou.modules.execution.support.FailureCategory;
 import com.qingzhou.modules.openapi.entity.OpenapiApp;
 import com.qingzhou.modules.openapi.mapper.OpenapiAppMapper;
@@ -44,6 +45,7 @@ public class ExecutionInstanceServiceImpl extends ServiceImpl<ExecutionInstanceM
     private final WorkflowService workflowService;
     private final OpenapiAppMapper openapiAppMapper;
     private final ScheduleJobMapper scheduleJobMapper;
+    private final ExecutionResultAssembler executionResultAssembler;
 
     @Override
     public IPage<ExecutionListVO> pageExecutions(ExecutionQuery query) {
@@ -75,6 +77,7 @@ public class ExecutionInstanceServiceImpl extends ServiceImpl<ExecutionInstanceM
                 .eq(ExecutionNodeLog::getExecutionId, id)
                 .orderByAsc(ExecutionNodeLog::getId)
                 .list());
+        vo.setPublicOutput(executionResultAssembler.projectPublicOutput(vo));
         return vo;
     }
 

@@ -44,16 +44,32 @@
       </div>
     </DetailSection>
 
-    <DetailSection title="入参 / 出参" hint="左侧为触发时传入的数据，右侧为工作流最终输出">
+    <DetailSection
+      :title="hasPublicOutput ? '入参 / 对外出参' : '入参 / 执行结果'"
+      :hint="sectionHint"
+    >
       <DetailCompare
         left-title="入参"
-        right-title="出参"
+        :right-title="hasPublicOutput ? '对外出参' : '执行结果'"
         :left-value="instance.inputParams"
-        :right-value="instance.outputResult"
+        :right-value="displayPublicOutput"
         left-empty="暂无入参"
-        right-empty="暂无出参"
+        :right-empty="hasPublicOutput ? '暂无出参' : '暂无结果'"
         left-copy-message="已复制入参"
-        right-copy-message="已复制出参"
+        :right-copy-message="hasPublicOutput ? '已复制对外出参' : '已复制执行结果'"
+      />
+    </DetailSection>
+
+    <DetailSection
+      v-if="showDebugOutput"
+      title="调试 · 按节点原始结果"
+      hint="内部按 nodeId 聚合，不等于开放 API 的 data.output"
+    >
+      <DetailCodeBlock
+        title="按节点原始结果"
+        :value="instance.outputResult"
+        copy-message="已复制原始结果"
+        max-height="220px"
       />
     </DetailSection>
 
@@ -94,13 +110,13 @@
               <div v-show="isOpen(reqName(item, index))" class="io-panel">
                 <DetailCompare
                   :left-title="isSqlLog(item) ? 'SQL / 参数' : '请求'"
-                  :right-title="isSqlLog(item) ? '结果预览' : '响应'"
+                  :right-title="isSqlLog(item) ? '节点结果' : '响应'"
                   :left-value="item.requestBody"
-                  :right-value="item.responseBody"
+                  :right-value="displayResponseBody(item)"
                   :left-empty="isSqlLog(item) ? '暂无 SQL' : '暂无请求体'"
                   :right-empty="isSqlLog(item) ? '暂无结果' : '暂无响应体'"
                   :left-copy-message="isSqlLog(item) ? '已复制 SQL' : '已复制请求'"
-                  :right-copy-message="isSqlLog(item) ? '已复制结果' : '已复制响应'"
+                  :right-copy-message="isSqlLog(item) ? '已复制节点结果' : '已复制响应'"
                   max-height="220px"
                 />
                 <DetailCodeBlock
@@ -132,6 +148,7 @@ import DetailCodeBlock from '@/components/detail/DetailCodeBlock.vue'
 import DetailEmpty from '@/components/detail/DetailEmpty.vue'
 import { copyText, durationText, formatTime, triggerLabel } from '@/utils/format'
 import { isSqlLog } from '@/utils/sqlParams'
+import { normalizePayloadForDisplay } from '@/utils/workflowBinding'
 
 const props = defineProps({
   instance: { type: Object, default: null },
@@ -141,11 +158,43 @@ const props = defineProps({
   executionLink: { type: String, default: '' },
   highlightNodeId: { type: String, default: '' },
   compact: { type: Boolean, default: false },
+  /** 试跑 / 开放调用同款投影结果；有则优先展示 */
+  publicOutput: { type: [Object, Array, String, Number, Boolean], default: undefined },
+  publicOutputHint: { type: String, default: '' },
 })
 
 const opened = ref([])
 const nodeEls = new Map()
 const focusedNodeId = ref('')
+
+const displayPublicOutput = computed(() => {
+  // 调用方传入了 publicOutput（含 null）→ 始终按对外出参展示，禁止回落调试大包
+  if (props.publicOutput !== undefined) {
+    return props.publicOutput
+  }
+  return props.instance?.outputResult
+})
+
+const hasPublicOutput = computed(() => props.publicOutput !== undefined)
+
+const sectionHint = computed(() => {
+  if (props.publicOutputHint) return props.publicOutputHint
+  if (hasPublicOutput.value) return '左侧为触发入参；右侧为开放 API / 调度看到的结果形态'
+  return '左侧为触发入参；右侧为按节点聚合的原始结果（未投影）'
+})
+
+const showDebugOutput = computed(() => {
+  if (!props.instance?.outputResult) return false
+  if (!hasPublicOutput.value) return false
+  try {
+    const raw = typeof props.instance.outputResult === 'string'
+      ? JSON.parse(props.instance.outputResult)
+      : props.instance.outputResult
+    return JSON.stringify(props.publicOutput ?? null) !== JSON.stringify(raw)
+  } catch {
+    return true
+  }
+})
 
 function nodeKey(item) {
   return item?.nodeId || String(item?.id || '')
@@ -204,6 +253,10 @@ function sqlResultText(item) {
     // ignore
   }
   return 'SQL 已执行'
+}
+
+function displayResponseBody(item) {
+  return normalizePayloadForDisplay(item?.responseBody)
 }
 
 function isOpen(name) {

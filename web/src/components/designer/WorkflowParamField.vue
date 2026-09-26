@@ -20,25 +20,19 @@
       >×</button>
     </div>
 
-    <div class="mode-cards">
+    <div class="mode-switch">
       <button
         type="button"
-        class="mode-card"
+        class="mode-chip"
         :class="{ active: mode === 'fixed' }"
         @click="onModeChange('fixed')"
-      >
-        <span class="mode-name">固定值</span>
-        <span class="mode-desc">写死不变</span>
-      </button>
+      >固定值</button>
       <button
         type="button"
-        class="mode-card"
+        class="mode-chip"
         :class="{ active: mode === 'data' }"
         @click="onModeChange('data')"
-      >
-        <span class="mode-name">取数据</span>
-        <span class="mode-desc">入参或前序步骤</span>
-      </button>
+      >取数据</button>
     </div>
 
     <div v-if="mode === 'fixed'" class="param-value">
@@ -104,14 +98,21 @@
               :label="`请求 · ${name}`"
             />
             <el-option
+              :value="`${step.id}:output:*`"
+              label="响应 · 完整结果"
+            />
+            <el-option
               v-for="name in step.responseFields"
               :key="`${step.id}:output:${name}`"
               :value="`${step.id}:output:${name}`"
-              :label="`响应 · ${name}`"
+              :label="responseFieldLabel(name)"
             />
           </el-option-group>
         </el-select>
         <p class="data-hint">{{ dataHint }}</p>
+        <p v-if="mode === 'data' && !upstreamSources.some((s) => s.responseFields?.length) && upstreamSources.length" class="data-hint muted">
+          前序步骤暂无响应字段；可选「完整结果」，或试跑后选用「首行 · 列名」
+        </p>
       </div>
     </div>
   </div>
@@ -149,7 +150,8 @@ const sourceValue = computed(() => {
   }
   if (props.binding.mode === 'upstream' && props.binding.fromNode && props.binding.fromField) {
     const side = props.binding.fromSource === 'request' ? 'request' : 'output'
-    return `${props.binding.fromNode}:${side}:${props.binding.fromField}`
+    const field = props.binding.fromField === '__whole__' ? '*' : props.binding.fromField
+    return `${props.binding.fromNode}:${side}:${field}`
   }
   return ''
 })
@@ -177,6 +179,13 @@ function inputOptionLabel(item) {
   return item.key
 }
 
+function responseFieldLabel(name) {
+  const raw = String(name || '')
+  if (raw.startsWith('rows[0].')) return `响应 · 首行.${raw.slice('rows[0].'.length)}`
+  if (raw === 'rows') return '响应 · rows（行集）'
+  return `响应 · ${raw}`
+}
+
 function emitChange(patch) {
   emit('change', { key: props.field.key, ...patch })
 }
@@ -193,8 +202,36 @@ function onModeChange(nextMode) {
     })
     return
   }
+  // 取数据：优先同名上游响应，再上游请求，再同名入参
+  const fieldKey = props.field.key
+  for (const step of props.upstreamSources || []) {
+    if (step.responseFields?.includes(fieldKey)) {
+      emitChange({
+        mode: 'upstream',
+        fromNode: step.id,
+        fromField: fieldKey,
+        fromSource: 'output',
+        inputKey: '',
+        value: '',
+      })
+      return
+    }
+  }
+  for (const step of props.upstreamSources || []) {
+    if (step.requestFields?.includes(fieldKey)) {
+      emitChange({
+        mode: 'upstream',
+        fromNode: step.id,
+        fromField: fieldKey,
+        fromSource: 'request',
+        inputKey: '',
+        value: '',
+      })
+      return
+    }
+  }
   if (props.inputFields.length) {
-    const key = props.inputFields.find((item) => item.key === props.field.key)?.key
+    const key = props.inputFields.find((item) => item.key === fieldKey)?.key
       || props.inputFields[0].key
     emitChange({
       mode: 'runtime',
@@ -208,7 +245,7 @@ function onModeChange(nextMode) {
   }
   const step = props.upstreamSources[0]
   if (step) {
-    const fromField = step.responseFields?.[0] || step.requestFields?.[0] || props.field.key
+    const fromField = step.responseFields?.[0] || step.requestFields?.[0] || fieldKey
     const fromSource = step.responseFields?.includes(fromField) ? 'output' : 'request'
     emitChange({
       mode: 'upstream',
@@ -222,7 +259,7 @@ function onModeChange(nextMode) {
   }
   emitChange({
     mode: 'runtime',
-    inputKey: props.field.key,
+    inputKey: fieldKey,
     fromNode: '',
     fromField: '',
     fromSource: '',
@@ -253,7 +290,11 @@ function onSourceChange(raw) {
   if (parts.length >= 3) {
     const fromNode = parts[0]
     const fromSource = parts[1] === 'request' ? 'request' : 'output'
-    const fromField = parts.slice(2).join(':')
+    let fromField = parts.slice(2).join(':')
+    if (fromField === '*' || fromField === '$') {
+      // 整步响应 → 引擎 fromPath 为空
+      fromField = '__whole__'
+    }
     emitChange({
       mode: 'upstream',
       fromNode,
@@ -268,8 +309,8 @@ function onSourceChange(raw) {
 
 <style scoped>
 .param-field {
-  margin-bottom: 14px;
-  padding: 14px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
   border-radius: var(--qz-radius);
   background: var(--qz-card);
   border: 1px solid var(--qz-border);
@@ -279,12 +320,12 @@ function onSourceChange(raw) {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .param-title { flex: 1; min-width: 0; }
-.param-label { font-size: 14px; font-weight: 600; }
+.param-label { font-size: 13px; font-weight: 600; }
 .param-key {
-  margin-top: 2px;
+  margin-top: 1px;
   font-size: 11px;
   color: var(--qz-text-muted);
   font-family: var(--qz-code-font);
@@ -310,49 +351,37 @@ function onSourceChange(raw) {
   border-color: var(--el-color-danger);
   color: var(--el-color-danger);
 }
-.mode-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.mode-card {
-  min-height: 52px;
-  padding: 8px 6px;
-  border: 2px solid var(--qz-border);
-  border-radius: var(--qz-radius);
+.mode-switch {
+  display: inline-flex;
+  gap: 0;
+  margin-bottom: 8px;
+  padding: 2px;
+  border-radius: 8px;
   background: var(--qz-fill);
-  cursor: pointer;
-  text-align: center;
-  touch-action: manipulation;
+  border: 1px solid var(--qz-border);
 }
-.mode-card:hover {
-  border-color: var(--el-color-primary-light-5);
-  background: var(--qz-primary-soft);
-}
-.mode-card.active {
-  border-color: var(--el-color-primary);
-  background: var(--qz-primary-soft);
-  box-shadow: 0 0 0 2px var(--qz-primary-soft);
-}
-.mode-name {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.3;
-}
-.mode-desc {
-  display: block;
-  margin-top: 2px;
-  font-size: 10px;
+.mode-chip {
+  border: 0;
+  background: transparent;
+  padding: 4px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 6px;
   color: var(--qz-text-muted);
+  cursor: pointer;
 }
-.param-value { margin-top: 4px; }
+.mode-chip.active {
+  background: var(--qz-card);
+  color: var(--el-color-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+.param-value { margin-top: 2px; }
 .data-box {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 8px 10px;
   border-radius: var(--qz-radius);
   background: var(--qz-fill);
   border: 1px dashed var(--el-color-primary-light-7);
@@ -363,4 +392,5 @@ function onSourceChange(raw) {
   color: #64748b;
   line-height: 1.5;
 }
+.data-hint.muted { opacity: 0.85; }
 </style>

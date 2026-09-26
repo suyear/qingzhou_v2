@@ -19,9 +19,13 @@
           :type="canvasVisible ? 'primary' : 'default'"
           @click="emit('toggle-canvas')"
         >
-          {{ canvasVisible ? '收起流程图' : '查看流程图' }}
+          {{ canvasVisible ? '收起流程图' : '流程图预览' }}
         </el-button>
-        <el-button v-if="chainNodes.length" type="success" :disabled="!canTryRun" @click="emit('try-run')">试运行</el-button>
+        <el-tooltip :disabled="canTryRun || !chainNodes.length" :content="tryRunHint || '请先完成配置'" placement="bottom">
+          <span v-if="chainNodes.length" class="head-btn-wrap">
+            <el-button type="success" :disabled="!canTryRun" @click="emit('try-run')">试运行</el-button>
+          </span>
+        </el-tooltip>
         <el-button type="primary" @click="focusQuickAdd">+ 添加步骤</el-button>
       </div>
     </div>
@@ -69,73 +73,89 @@
               <p>还没有步骤</p>
               <el-button type="primary" size="small" @click="leftTab = 'add'">去添加接口</el-button>
             </div>
+            <p v-else class="timeline-tip">点击选中配置；卡片间 ⊕ 可插入；↑↓ 调顺序</p>
 
-            <div
-              v-for="(item, index) in chainNodes"
-              :id="`step-${item.id}`"
-              :key="item.id"
-              class="timeline-item"
-              :class="{
-                active: selectedId === item.id,
-                done: item.configured,
-                pending: !item.configured && item.fieldCount,
-              }"
-            >
-              <div v-if="index > 0" class="timeline-line" />
-              <button
-                type="button"
-                class="timeline-main"
-                @click="selectStep(item.id)"
+            <template v-for="(item, index) in chainNodes" :key="item.id">
+              <div
+                :id="`step-${item.id}`"
+                class="timeline-item"
+                :class="{
+                  active: selectedId === item.id,
+                  done: item.configured,
+                  pending: !item.configured && item.fieldCount,
+                }"
               >
-                <span class="timeline-index">
-                  <span v-if="item.configured" class="check">✓</span>
-                  <span v-else>{{ index + 1 }}</span>
-                </span>
-                <span class="timeline-content">
-                  <span class="timeline-title-row">
-                    <span class="timeline-title">{{ item.name }}</span>
-                    <el-tag v-if="item.configured" size="small" type="success" effect="plain">完成</el-tag>
-                    <el-tag v-else-if="item.fieldCount" size="small" type="warning" effect="plain">待填</el-tag>
+                <div v-if="index > 0" class="timeline-line" :class="{ linked: item.deps?.length }" />
+                <button
+                  type="button"
+                  class="timeline-main"
+                  @click="selectStep(item.id)"
+                >
+                  <span class="timeline-index">
+                    <span v-if="item.configured" class="check">✓</span>
+                    <span v-else>{{ index + 1 }}</span>
                   </span>
-                  <span class="timeline-sub">{{ item.method }} {{ item.path }}</span>
-                  <span v-if="item.summaryLines?.length" class="timeline-summary">
-                    <span
-                      v-for="line in item.summaryLines.slice(0, 2)"
-                      :key="line.key"
-                      class="summary-chip"
-                      :class="{ ok: line.done }"
-                    >
-                      {{ line.label }}：{{ line.text }}
+                  <span class="timeline-content">
+                    <span class="timeline-title-row">
+                      <span class="timeline-title">{{ item.name }}</span>
+                      <el-tag v-if="item.configured" size="small" type="success" effect="plain">完成</el-tag>
+                      <el-tag v-else-if="item.fieldCount" size="small" type="warning" effect="plain">待填</el-tag>
+                    </span>
+                    <span class="timeline-sub">{{ item.method }} {{ item.path }}</span>
+                    <span v-if="item.deps?.length" class="timeline-deps">
+                      <span v-for="dep in item.deps.slice(0, 2)" :key="dep.fromNode" class="dep-chip">
+                        {{ dep.label }}
+                      </span>
+                    </span>
+                    <span v-else-if="index > 0" class="timeline-deps muted">未接上游数据</span>
+                    <span v-if="item.summaryLines?.length" class="timeline-summary">
+                      <span
+                        v-for="line in item.summaryLines.slice(0, 2)"
+                        :key="line.key"
+                        class="summary-chip"
+                        :class="{ ok: line.done }"
+                      >
+                        {{ line.label }}：{{ line.text }}
+                      </span>
                     </span>
                   </span>
-                </span>
-              </button>
-              <div class="timeline-ops">
-                <button
-                  v-if="index > 0"
-                  type="button"
-                  class="op-btn"
-                  title="上移"
-                  @click="emit('move', item.id, -1)"
-                >
-                  ↑
                 </button>
-                <button
-                  v-if="index < chainNodes.length - 1"
-                  type="button"
-                  class="op-btn"
-                  title="下移"
-                  @click="emit('move', item.id, 1)"
-                >
-                  ↓
-                </button>
-                <el-popconfirm title="删除此步骤？" @confirm="emit('remove', item.id)">
-                  <template #reference>
-                    <button type="button" class="op-btn danger" title="删除">×</button>
-                  </template>
-                </el-popconfirm>
+                <div class="timeline-ops">
+                  <button
+                    v-if="index > 0"
+                    type="button"
+                    class="op-btn"
+                    title="上移"
+                    @click="emit('move', item.id, -1)"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    v-if="index < chainNodes.length - 1"
+                    type="button"
+                    class="op-btn"
+                    title="下移"
+                    @click="emit('move', item.id, 1)"
+                  >
+                    ↓
+                  </button>
+                  <el-popconfirm title="删除此步骤？" @confirm="emit('remove', item.id)">
+                    <template #reference>
+                      <button type="button" class="op-btn danger" title="删除">×</button>
+                    </template>
+                  </el-popconfirm>
+                </div>
               </div>
-            </div>
+              <button
+                type="button"
+                class="timeline-insert"
+                :title="`在第 ${index + 1} 步后插入`"
+                @click="beginInsertAfter(item.id, index)"
+              >
+                <span class="insert-plus">⊕</span>
+                <span class="insert-text">插入下一步</span>
+              </button>
+            </template>
           </nav>
 
           <section v-show="leftTab === 'inputs'" class="inputs-panel">
@@ -167,20 +187,36 @@
           </section>
 
           <section v-show="leftTab === 'outputs'" class="inputs-panel">
-            <p class="quick-hint">发布后开放 API / 调度调用方看到的结果形态。试运行仍可在右侧看各步骤明细。</p>
+            <p class="quick-hint">配置开放 API / 调度看到的结果。试运行主区会展示同一形态；节点明细仅供调试。</p>
+            <el-alert
+              v-if="workflowStatus === 'PUBLISHED'"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="output-alert"
+              :title="workflowDirty
+                ? '草稿出参已改，开放/调度仍用已发布快照，需重新发布才生效'
+                : `开放/调度使用已发布快照；试运行走当前草稿`"
+            />
             <div class="output-mode">
               <el-radio-group :model-value="outputSchema.mode || 'last'" @change="onOutputModeChange">
-                <el-radio-button value="last">仅最后一步</el-radio-button>
+                <el-radio-button value="last">完整结果</el-radio-button>
+                <el-radio-button value="firstRow">查询首行</el-radio-button>
                 <el-radio-button value="fields">字段投影</el-radio-button>
               </el-radio-group>
             </div>
             <p v-if="(outputSchema.mode || 'last') === 'last'" class="inputs-empty-sub">
-              对外返回最后一步的完整响应（与单节点 unwrap 一致）。
+              对外返回{{ lastStepName ? `第末步「${lastStepName}」` : '最后一步' }}的完整结果
+              （DB 查询为 rowCount / rows / truncated 整包）。
+            </p>
+            <p v-else-if="outputSchema.mode === 'firstRow'" class="inputs-empty-sub">
+              适合「按 ID 查单条」：从末步查询结果的 <code>rows[0]</code> 取出对象直接对外返回；
+              无行时为 null；若末步不是查询结果则与「完整结果」相同。
             </p>
             <template v-else>
               <div v-if="!(outputSchema.fields || []).length" class="inputs-empty">
                 <p>还没有出参字段</p>
-                <p class="inputs-empty-sub">从某步响应中挑选要对外暴露的字段</p>
+                <p class="inputs-empty-sub warn">未配置时保存会按「最后一步」生效，不会静默变成多节点大包</p>
               </div>
               <div
                 v-for="(row, index) in (outputSchema.fields || [])"
@@ -196,7 +232,8 @@
                   :model-value="outputSourceValue(row)"
                   filterable
                   allow-create
-                  placeholder="来源：步骤 · 响应字段"
+                  default-first-option
+                  placeholder="来源：整步或字段（可手输 $.rows[0].列名）"
                   style="width: 100%"
                   @change="(val) => onOutputSourceChange(index, val)"
                 >
@@ -206,10 +243,14 @@
                     :label="`第 ${si + 1} 步 · ${step.name}`"
                   >
                     <el-option
+                      :value="`${step.id}:*`"
+                      :label="`完整响应`"
+                    />
+                    <el-option
                       v-for="name in step.responseFields"
                       :key="`${step.id}:${name}`"
                       :value="`${step.id}:${name}`"
-                      :label="name"
+                      :label="fieldOptionLabel(name)"
                     />
                   </el-option-group>
                 </el-select>
@@ -220,12 +261,36 @@
                 />
                 <button type="button" class="op-btn danger" title="删除" @click="removeOutputField(index)">×</button>
               </div>
-              <el-button type="primary" plain class="add-input-btn" @click="addOutputField">+ 添加出参字段</el-button>
+              <el-button
+                type="primary"
+                plain
+                class="add-input-btn"
+                :disabled="!allStepSources.length"
+                @click="addOutputField"
+              >+ 添加出参字段</el-button>
             </template>
+
+            <div class="output-preview">
+              <div class="output-preview-title">预计返回形状</div>
+              <pre class="output-preview-code">{{ outputShapeText }}</pre>
+              <template v-if="recentPublicOutput !== undefined && recentPublicOutput !== null">
+                <div class="output-preview-title mt">最近试跑 · 对外出参</div>
+                <pre class="output-preview-code">{{ recentOutputText }}</pre>
+              </template>
+            </div>
           </section>
 
           <section v-show="leftTab === 'add'" ref="quickAddRef" class="quick-add">
-            <p class="quick-hint">从组件库挑选 HTTP 接口或数据库脚本，添加到调用链末尾</p>
+            <p class="quick-hint">{{ addHint }}</p>
+            <el-alert
+              v-if="pendingInsertAfterId"
+              type="info"
+              :closable="true"
+              show-icon
+              class="insert-alert"
+              :title="insertHintTitle"
+              @close="pendingInsertAfterId = null"
+            />
             <el-input
               v-model="pickerKeyword"
               size="default"
@@ -286,7 +351,7 @@
 
           <div class="step-toolbar">
             <el-button :disabled="selectedIndex <= 0" @click="goStep(-1)">← 上一步</el-button>
-            <el-button :disabled="selectedIndex >= chainNodes.length - 1" @click="goStep(1)">下一步 →</el-button>
+            <el-button @click="goStep(1)">{{ nextStepLabel }}</el-button>
             <el-button :disabled="selectedIndex <= 0" @click="emit('move', selectedId, -1)">上移</el-button>
             <el-button :disabled="selectedIndex >= chainNodes.length - 1" @click="emit('move', selectedId, 1)">下移</el-button>
             <el-popconfirm title="确定删除此步骤？" @confirm="emit('remove', selectedId)">
@@ -295,6 +360,20 @@
               </template>
             </el-popconfirm>
           </div>
+
+          <el-alert
+            v-if="upstreamSources.length && selectedIndex > 0"
+            type="info"
+            :closable="false"
+            show-icon
+            class="upstream-alert"
+            title="本步可从前序步骤取数"
+          >
+            <div class="upstream-alert-body">
+              <span>有 {{ upstreamSources.length }} 个上游步骤。可一键按同名绑定，或在参数里选「取数据」。</span>
+              <el-button size="small" type="primary" plain @click="emit('auto-bind-upstream')">按同名绑定上游</el-button>
+            </div>
+          </el-alert>
 
           <el-form label-position="top" size="default" class="config-form">
             <el-form-item label="步骤名称">
@@ -382,12 +461,25 @@
     </div>
 
     <footer v-if="chainNodes.length" class="editor-footer">
-      <span v-if="!allDone" class="footer-hint">还有 {{ chainNodes.length - configuredCount }} 步待配置</span>
-      <span v-else class="footer-hint ok">全部已配置</span>
+      <span
+        v-if="!allDone"
+        class="footer-hint linkish"
+        @click="selectFirstPending"
+      >还有 {{ chainNodes.length - configuredCount }} 步待配置，点击跳转</span>
+      <span v-else-if="!canPublish && publishHint" class="footer-hint">{{ publishHint }}</span>
+      <span v-else class="footer-hint ok">全部已配置，可以试跑或发布</span>
       <div class="footer-actions">
         <el-button type="primary" plain @click="focusQuickAdd">+ 添加</el-button>
-        <el-button type="success" :disabled="!canTryRun" @click="emit('try-run')">试运行</el-button>
-        <el-button type="warning" :disabled="!canPublish" @click="emit('publish')">发布</el-button>
+        <el-tooltip :disabled="canTryRun" :content="tryRunHint || '请先完成配置'" placement="top">
+          <span class="head-btn-wrap">
+            <el-button type="success" :disabled="!canTryRun" @click="emit('try-run')">试运行</el-button>
+          </span>
+        </el-tooltip>
+        <el-tooltip :disabled="canPublish" :content="publishHint || '请先完成配置'" placement="top">
+          <span class="head-btn-wrap">
+            <el-button type="warning" :disabled="!canPublish" @click="emit('publish')">发布</el-button>
+          </span>
+        </el-tooltip>
       </div>
     </footer>
   </main>
@@ -411,16 +503,22 @@ const props = defineProps({
   allStepSources: { type: Array, default: () => [] },
   inputFields: { type: Array, default: () => [] },
   outputSchema: { type: Object, default: () => ({ mode: 'last', fields: [] }) },
+  workflowStatus: { type: String, default: '' },
+  workflowDirty: { type: Boolean, default: false },
+  lastStepName: { type: String, default: '' },
+  recentPublicOutput: { type: [Object, Array, String, Number, Boolean], default: undefined },
   components: { type: Array, default: () => [] },
   canTryRun: { type: Boolean, default: false },
   canPublish: { type: Boolean, default: false },
+  tryRunHint: { type: String, default: '' },
+  publishHint: { type: String, default: '' },
   canvasVisible: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
   'select', 'remove', 'move', 'add', 'update-name', 'update-bindings',
   'update-input-fields', 'update-output-schema', 'add-custom-field', 'remove-custom-field',
-  'try-run', 'publish', 'toggle-canvas',
+  'try-run', 'publish', 'toggle-canvas', 'auto-bind-upstream',
 ])
 
 const router = useRouter()
@@ -430,6 +528,7 @@ const quickAddRef = ref(null)
 const leftScrollRef = ref(null)
 const showOptional = ref(false)
 const showAddCustom = ref(false)
+const pendingInsertAfterId = ref(null)
 const customDraft = reactive({ key: '', description: '', required: false })
 
 const selectedIndex = computed(() => {
@@ -448,6 +547,25 @@ const progressPercent = computed(() => {
 const requiredDone = computed(() =>
   requiredFields.value.filter((field) => isFieldConfigured(findBinding(field.key), field)).length,
 )
+const insertHintTitle = computed(() => {
+  if (!pendingInsertAfterId.value) return ''
+  const idx = props.chainNodes.findIndex((item) => item.id === pendingInsertAfterId.value)
+  const name = props.chainNodes[idx]?.name || '当前步骤'
+  return `下一步将插入到「${name}」之后（第 ${(idx >= 0 ? idx : 0) + 2} 位）`
+})
+const addHint = computed(() => {
+  if (pendingInsertAfterId.value) return '选择接口后插入到指定位置'
+  if (props.selectedId && props.chainNodes.length) return '选择接口后默认插到当前步骤之后；也可在时间线点 ⊕'
+  return '从组件库挑选 HTTP 接口或数据库脚本，开始编排'
+})
+const nextStepLabel = computed(() => {
+  const current = props.chainNodes[selectedIndex.value]
+  if (current && !current.configured) return '完成本步后继续'
+  const pending = props.chainNodes.find((item, i) => i > selectedIndex.value && !item.configured)
+  if (pending) return '下一待配 →'
+  if (selectedIndex.value >= props.chainNodes.length - 1) return '添加下一步'
+  return '下一步 →'
+})
 const filteredComponents = computed(() => {
   const kw = pickerKeyword.value.trim()
   if (!kw) return props.components
@@ -465,6 +583,64 @@ const groupedComponents = computed(() => {
     map.get(key).items.push(item)
   }
   return [...map.values()]
+})
+
+function fieldOptionLabel(name) {
+  const raw = String(name || '')
+  if (raw.startsWith('rows[0].')) return `首行 · ${raw.slice('rows[0].'.length)}`
+  if (raw === 'rows') return 'rows（行集）'
+  if (raw === 'rowCount') return 'rowCount（行数）'
+  return raw
+}
+
+const outputShapePreview = computed(() => {
+  const mode = props.outputSchema?.mode || 'last'
+  if (mode === 'firstRow') {
+    return {
+      _mode: 'firstRow',
+      _from: props.lastStepName
+        ? `末步「${props.lastStepName}」→ rows[0]`
+        : '末步查询结果 → rows[0]',
+      id: '…',
+      username: '…',
+    }
+  }
+  if (mode !== 'fields') {
+    return {
+      _mode: 'last',
+      _from: props.lastStepName ? `末步「${props.lastStepName}」完整结果` : '最后一步完整结果',
+      rowCount: 1,
+      rows: ['…'],
+      truncated: false,
+    }
+  }
+  const fields = props.outputSchema?.fields || []
+  if (!fields.length) {
+    return { _mode: 'fields', _note: '未配置字段；保存后按最后一步返回' }
+  }
+  const shape = {}
+  for (const row of fields) {
+    const key = row.key || '?'
+    const path = row.fromPath ? String(row.fromPath) : '（完整）'
+    shape[key] = `← ${row.fromNode || '?'}${path === '（完整）' ? path : path}`
+  }
+  return shape
+})
+
+const outputShapeText = computed(() => {
+  try {
+    return JSON.stringify(outputShapePreview.value, null, 2)
+  } catch {
+    return '{}'
+  }
+})
+
+const recentOutputText = computed(() => {
+  try {
+    return JSON.stringify(props.recentPublicOutput, null, 2)
+  } catch {
+    return String(props.recentPublicOutput)
+  }
 })
 
 watch(() => props.selectedId, async (id) => {
@@ -575,30 +751,39 @@ function patchOutputField(index, patch) {
 function outputSourceValue(row) {
   if (!row?.fromNode) return ''
   const field = String(row.fromPath || '').replace(/^\$\.?/, '')
-  return field ? `${row.fromNode}:${field}` : row.fromNode
+  if (!field || field === '*') return `${row.fromNode}:*`
+  return `${row.fromNode}:${field}`
 }
 
 function onOutputSourceChange(index, raw) {
-  const value = String(raw || '')
+  let value = String(raw || '').trim()
+  if (!value) return
+  // allow-create: 支持 "nodeId:$.a.b" 或仅路径时挂到末步
+  if (!value.includes(':')) {
+    const last = props.allStepSources[props.allStepSources.length - 1]
+    if (!last) return
+    value = `${last.id}:${value}`
+  }
   const idx = value.indexOf(':')
-  if (idx < 0) return
   const fromNode = value.slice(0, idx)
   const fromField = value.slice(idx + 1)
   const row = props.outputSchema.fields?.[index] || {}
+  const whole = !fromField || fromField === '*' || fromField === '$'
   patchOutputField(index, {
     fromNode,
-    fromPath: fromField.startsWith('$.') ? fromField : `$.${fromField}`,
-    key: row.key || fromField,
+    fromPath: whole ? '' : (fromField.startsWith('$.') ? fromField : `$.${fromField}`),
+    key: row.key || (whole ? `${fromNode}_result` : fromField.replace(/^\$\./, '')),
   })
 }
 
 function addOutputField() {
   const last = props.allStepSources[props.allStepSources.length - 1]
-  const fromField = last?.responseFields?.[0] || 'data'
+  if (!last) return
+  const fromField = last.responseFields?.[0] || ''
   const fields = [...(props.outputSchema.fields || []), {
-    key: fromField,
-    fromNode: last?.id || '',
-    fromPath: `$.${fromField}`,
+    key: fromField || 'result',
+    fromNode: last.id,
+    fromPath: fromField ? `$.${fromField}` : '',
     description: '',
   }]
   emit('update-output-schema', { mode: 'fields', fields })
@@ -649,13 +834,42 @@ function selectStep(id) {
 }
 
 function goStep(delta) {
+  if (delta > 0) {
+    const current = props.chainNodes[selectedIndex.value]
+    if (current && !current.configured) {
+      ElMessage.warning('请先完成本步必填参数')
+      return
+    }
+    const pending = props.chainNodes.find((item, i) => i > selectedIndex.value && !item.configured)
+    if (pending) {
+      emit('select', pending.id)
+      return
+    }
+    if (selectedIndex.value >= props.chainNodes.length - 1) {
+      beginInsertAfter(props.selectedId, selectedIndex.value)
+      return
+    }
+  }
   const next = props.chainNodes[selectedIndex.value + delta]
   if (next) emit('select', next.id)
 }
 
+function beginInsertAfter(afterId, index) {
+  pendingInsertAfterId.value = afterId
+  leftTab.value = 'add'
+  nextTick(() => {
+    quickAddRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    quickAddRef.value?.querySelector('input')?.focus()
+  })
+  const name = props.chainNodes[index]?.name || '当前步骤'
+  ElMessage.info(`选择接口后，将插入到「${name}」之后`)
+}
+
 function pickComponent(item) {
   pickerKeyword.value = ''
-  emit('add', item)
+  const afterId = pendingInsertAfterId.value || props.selectedId || null
+  emit('add', item, afterId ? { afterId } : { append: !props.chainNodes.length })
+  pendingInsertAfterId.value = null
   leftTab.value = 'steps'
 }
 
@@ -666,6 +880,9 @@ function selectFirstPending() {
 }
 
 function focusQuickAdd() {
+  if (props.selectedId) {
+    pendingInsertAfterId.value = props.selectedId
+  }
   leftTab.value = 'add'
   nextTick(() => {
     quickAddRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -692,7 +909,8 @@ function focusQuickAdd() {
   border-bottom: 1px solid var(--qz-border);
 }
 .head-main { flex: 1; min-width: 0; }
-.head-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.head-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
+.head-btn-wrap { display: inline-flex; }
 .editor-title { margin: 0; font-size: 16px; font-weight: 700; }
 .editor-desc { margin: 4px 0 8px; font-size: 12px; color: var(--qz-text-muted); }
 .progress-bar { max-width: 260px; }
@@ -752,6 +970,78 @@ function focusQuickAdd() {
   gap: 12px;
   align-items: center;
 }
+.timeline-tip {
+  margin: 0 0 10px;
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--qz-text-muted);
+  line-height: 1.4;
+}
+.timeline-line {
+  position: absolute;
+  left: 22px;
+  top: -10px;
+  width: 2px;
+  height: 10px;
+  background: var(--qz-border);
+  pointer-events: none;
+}
+.timeline-line.linked {
+  background: var(--el-color-primary-light-5);
+}
+.timeline-deps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.timeline-deps.muted {
+  font-size: 11px;
+  color: var(--qz-text-muted);
+}
+.dep-chip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--qz-primary-soft);
+  color: var(--el-color-primary);
+}
+.timeline-insert {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  border: 1px dashed var(--qz-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--qz-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.timeline-insert:hover {
+  border-color: var(--el-color-primary-light-5);
+  color: var(--el-color-primary);
+  background: var(--qz-primary-soft);
+}
+.insert-plus { font-size: 14px; line-height: 1; }
+.insert-alert { margin-bottom: 10px; }
+.upstream-alert { margin: 0 0 12px; }
+.upstream-alert-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+.footer-hint.linkish {
+  cursor: pointer;
+  color: var(--el-color-primary);
+}
+.footer-hint.linkish:hover { text-decoration: underline; }
 .timeline-item {
   position: relative;
   display: flex;
@@ -771,15 +1061,6 @@ function focusQuickAdd() {
 }
 .timeline-item.done:not(.active) { border-color: var(--el-color-success-light-5); }
 .timeline-item.pending:not(.active) { border-color: var(--el-color-warning-light-5); }
-.timeline-line {
-  position: absolute;
-  top: -11px;
-  left: 26px;
-  width: 2px;
-  height: 11px;
-  background: var(--el-color-primary-light-5);
-  pointer-events: none;
-}
 .timeline-main {
   flex: 1;
   display: flex;
@@ -894,6 +1175,37 @@ function focusQuickAdd() {
 .inputs-empty-sub {
   margin-top: 6px;
   font-size: 12px;
+}
+.inputs-empty-sub.warn {
+  color: var(--el-color-warning);
+}
+.output-alert {
+  margin-bottom: 12px;
+}
+.output-preview {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+}
+.output-preview-title {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 6px;
+}
+.output-preview-title.mt {
+  margin-top: 12px;
+}
+.output-preview-code {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--el-fill-color-light);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .input-row {
   display: grid;

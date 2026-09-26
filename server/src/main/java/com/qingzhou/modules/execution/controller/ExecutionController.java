@@ -9,6 +9,7 @@ import com.qingzhou.modules.execution.dto.ExecutionListVO;
 import com.qingzhou.modules.execution.dto.ExecutionQuery;
 import com.qingzhou.modules.execution.dto.ExecutionVO;
 import com.qingzhou.modules.execution.dto.TryRunRequest;
+import com.qingzhou.modules.execution.support.ExecutionResultAssembler;
 import com.qingzhou.modules.execution.engine.WorkflowEngine;
 import com.qingzhou.modules.execution.entity.ExecutionNodeLog;
 import com.qingzhou.modules.execution.service.ExecutionInstanceService;
@@ -38,6 +39,7 @@ public class ExecutionController {
 
     private final ExecutionInstanceService executionInstanceService;
     private final WorkflowEngine workflowEngine;
+    private final ExecutionResultAssembler executionResultAssembler;
 
     @GetMapping
     public R<IPage<ExecutionListVO>> page(ExecutionQuery query) {
@@ -84,7 +86,11 @@ public class ExecutionController {
 
     @PostMapping("/{id}/replay")
     public R<ExecutionVO> replay(@PathVariable Long id, @RequestBody(required = false) TryRunRequest request) {
-        return R.ok(workflowEngine.replay(id, request == null ? null : request.getInput()));
+        ExecutionVO vo = workflowEngine.replay(id, request == null ? null : request.getInput());
+        if (vo != null) {
+            vo.setPublicOutput(executionResultAssembler.projectPublicOutput(vo));
+        }
+        return R.ok(vo);
     }
 
     @PostMapping("/batch-replay")

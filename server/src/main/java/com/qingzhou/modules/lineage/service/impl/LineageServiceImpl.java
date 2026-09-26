@@ -4,10 +4,12 @@ import com.qingzhou.common.api.ResultCode;
 import com.qingzhou.common.exception.BizException;
 import com.qingzhou.modules.component.entity.ApiComponent;
 import com.qingzhou.modules.component.service.ApiComponentService;
+import com.qingzhou.modules.execution.dto.ExecutionVO;
 import com.qingzhou.modules.execution.entity.ExecutionInstance;
 import com.qingzhou.modules.execution.entity.ExecutionNodeLog;
 import com.qingzhou.modules.execution.service.ExecutionInstanceService;
 import com.qingzhou.modules.execution.service.ExecutionNodeLogService;
+import com.qingzhou.modules.execution.support.ExecutionResultAssembler;
 import com.qingzhou.modules.lineage.dto.ExecutionChainVO;
 import com.qingzhou.modules.lineage.dto.LineageRefVO;
 import com.qingzhou.modules.lineage.dto.LineageVO;
@@ -52,6 +54,7 @@ public class LineageServiceImpl implements LineageService {
     private final OpenapiAppWorkflowService openapiAppWorkflowService;
     private final ExecutionInstanceService executionInstanceService;
     private final ExecutionNodeLogService executionNodeLogService;
+    private final ExecutionResultAssembler executionResultAssembler;
 
     @Override
     public LineageVO componentLineage(Long componentId) {
@@ -118,6 +121,10 @@ public class LineageServiceImpl implements LineageService {
             vo.setLineage(empty);
         }
         vo.setTrigger(resolveTrigger(instance, vo.getLineage()));
+        ExecutionVO execVo = new ExecutionVO();
+        execVo.setInstance(instance);
+        execVo.setLogs(logs);
+        vo.setPublicOutput(executionResultAssembler.projectPublicOutput(execVo));
         return vo;
     }
 

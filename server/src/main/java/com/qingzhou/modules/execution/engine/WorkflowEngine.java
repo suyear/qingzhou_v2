@@ -162,6 +162,10 @@ public class WorkflowEngine {
         LocalDateTime ended = LocalDateTime.now();
         instance.setEndTime(ended);
         instance.setDurationMs(java.time.Duration.between(started, ended).toMillis());
+        // 失败也落盘已成功节点的业务输出，便于投影 / 部分结果排查（与 SUCCESS 同形态）
+        if (!outputs.isEmpty()) {
+            instance.setOutputResult(jsons.toJson(outputs));
+        }
         if (failed.get()) {
             String msg = failMsg.get();
             boolean timedOut = FailureCategory.looksLikeTimeout(msg)
@@ -173,7 +177,6 @@ public class WorkflowEngine {
             instance.setErrorMsg(msg);
         } else {
             instance.setStatus("SUCCESS");
-            instance.setOutputResult(jsons.toJson(outputs));
         }
         executionInstanceService.updateById(instance);
 

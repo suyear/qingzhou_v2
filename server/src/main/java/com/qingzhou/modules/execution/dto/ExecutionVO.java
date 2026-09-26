@@ -11,4 +11,6 @@ import java.util.List;
 public class ExecutionVO {
     private ExecutionInstance instance;
     private List<ExecutionNodeLog> logs = new ArrayList<>();
+    /** 与开放 API data.output 同形态的投影结果 */
+    private Object publicOutput;
 }
