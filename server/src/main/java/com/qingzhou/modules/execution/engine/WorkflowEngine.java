@@ -130,6 +130,7 @@ public class WorkflowEngine {
         ExecutionInstance instance = startInstance(runtime, triggerType, appId, input, spec.snapshotId());
         Map<String, Object> outputs = new ConcurrentHashMap<>();
         Map<String, Object> requestPayloads = new ConcurrentHashMap<>();
+        Map<Long, ApiComponent> componentCache = preloadComponents(graph);
         AtomicBoolean failed = new AtomicBoolean(false);
         AtomicReference<String> failMsg = new AtomicReference<>();
         LocalDateTime started = LocalDateTime.now();
@@ -144,7 +145,7 @@ public class WorkflowEngine {
                     futures.add(CompletableFuture.runAsync(() -> {
                         try {
                             Object output = executeNode(
-                                    instance, runtime, nodeMap.get(nodeId), input, outputs, requestPayloads, mappings);
+                                    instance, runtime, nodeMap.get(nodeId), input, outputs, requestPayloads, mappings, componentCache);
                             if (output != null) {
                                 outputs.put(nodeId, output);
                             }
@@ -196,8 +197,9 @@ public class WorkflowEngine {
             Map<String, Object> input,
             Map<String, Object> outputs,
             Map<String, Object> requestPayloads,
-            List<ParamMappingItem> mappings) {
-        ApiComponent component = resolveComponent(dagNode);
+            List<ParamMappingItem> mappings,
+            Map<Long, ApiComponent> componentCache) {
+        ApiComponent component = resolveComponent(dagNode, componentCache);
         Map<String, Object> payload = buildPayload(dagNode, input, outputs, requestPayloads, mappings);
         requestPayloads.put(dagNode.getId(), payload);
         ExecutionNodeLog nodeLog = new ExecutionNodeLog();
@@ -307,7 +309,7 @@ public class WorkflowEngine {
         headers.putAll(auth.headers());
         nodeLog.setRequestUrl(HttpUrlSupport.maskSecret(uri.toString()));
         nodeLog.setRequestHeaders(jsons.toJson(HttpAuthSupport.maskHeaders(headers)));
-        nodeLog.setRequestBody(body);
+        nodeLog.setRequestBody(HttpUrlSupport.truncateBody(body));
         executionNodeLogService.updateById(nodeLog);
 
         int timeout = component.getTimeoutMs() == null ? 10000 : component.getTimeoutMs();
@@ -339,7 +341,7 @@ public class WorkflowEngine {
         nodeLog.setRetryCount(attempted);
         if (last != null) {
             nodeLog.setResponseStatus(last.status() == 0 ? null : last.status());
-            nodeLog.setResponseBody(last.body());
+            nodeLog.setResponseBody(HttpUrlSupport.truncateBody(last.body()));
         }
         if (last != null && last.success()) {
             nodeLog.setStatus("SUCCESS");
@@ -363,10 +365,45 @@ public class WorkflowEngine {
         executionNodeLogService.updateById(nodeLog);
     }
 
-    private ApiComponent resolveComponent(DagNode dagNode) {
+    private Map<Long, ApiComponent> preloadComponents(DagGraph graph) {
+        Map<Long, ApiComponent> cache = new ConcurrentHashMap<>();
+        if (graph == null || graph.getNodes() == null || graph.getNodes().isEmpty()) {
+            return cache;
+        }
+        List<Long> ids = new ArrayList<>();
+        for (DagNode node : graph.getNodes()) {
+            Long id = node.getComponentId();
+            if (id == null && node.getData() != null && node.getData().get("componentId") != null) {
+                try {
+                    id = Long.valueOf(String.valueOf(node.getData().get("componentId")));
+                } catch (NumberFormatException ignored) {
+                    // fall through to per-node resolve
+                }
+            }
+            if (id != null) {
+                ids.add(id);
+            }
+        }
+        if (!ids.isEmpty()) {
+            List<ApiComponent> list = apiComponentService.listByIds(ids);
+            if (list != null) {
+                for (ApiComponent component : list) {
+                    if (component != null && component.getId() != null) {
+                        cache.put(component.getId(), component);
+                    }
+                }
+            }
+        }
+        return cache;
+    }
+
+    private ApiComponent resolveComponent(DagNode dagNode, Map<Long, ApiComponent> componentCache) {
         ApiComponent component = null;
         if (dagNode.getComponentId() != null) {
-            component = apiComponentService.getById(dagNode.getComponentId());
+            component = componentCache != null ? componentCache.get(dagNode.getComponentId()) : null;
+            if (component == null) {
+                component = apiComponentService.getById(dagNode.getComponentId());
+            }
         }
         if (component == null && StringUtils.hasText(dagNode.getComponentCode())) {
             component = apiComponentService.lambdaQuery()
@@ -374,10 +411,17 @@ public class WorkflowEngine {
                     .one();
         }
         if (component == null && dagNode.getData() != null && dagNode.getData().get("componentId") != null) {
-            component = apiComponentService.getById(Long.valueOf(String.valueOf(dagNode.getData().get("componentId"))));
+            Long id = Long.valueOf(String.valueOf(dagNode.getData().get("componentId")));
+            component = componentCache != null ? componentCache.get(id) : null;
+            if (component == null) {
+                component = apiComponentService.getById(id);
+            }
         }
         if (component == null) {
             throw new BizException(ResultCode.NOT_FOUND, "节点未绑定接口组件: " + dagNode.getId());
+        }
+        if (componentCache != null && component.getId() != null) {
+            componentCache.putIfAbsent(component.getId(), component);
         }
         return component;
     }

@@ -20,10 +20,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .allowedHeaders("*")
                 .allowCredentials(true)
                 .maxAge(3600);
+        // OpenAPI 为机器调用签名鉴权，不携带浏览器 Cookie；收紧为常见调用场景的方法/头
         registry.addMapping("/openapi/**")
                 .allowedOriginPatterns("*")
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
-                .allowedHeaders("*")
+                .allowedMethods("GET", "POST", "OPTIONS")
+                .allowedHeaders("Content-Type", "X-App-Key", "X-Timestamp", "X-Nonce", "X-Signature", "Authorization")
+                .allowCredentials(false)
                 .maxAge(3600);
     }
 

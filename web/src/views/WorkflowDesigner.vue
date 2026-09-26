@@ -321,6 +321,16 @@ let hydrating = false
 let ready = false
 let canvasResizeObserver = null
 let canvasWrapEl = null
+let nodeTickRaf = 0
+
+/** 合并同一帧内多次画布变更，避免 computed 连环重算 */
+function bumpNodeTick() {
+  if (nodeTickRaf) return
+  nodeTickRaf = requestAnimationFrame(() => {
+    nodeTickRaf = 0
+    nodeTick.value += 1
+  })
+}
 const canvasEmpty = computed(() => {
   nodeTick.value
   return !graph || graph.getNodes().length === 0
@@ -498,7 +508,7 @@ function relayoutChain() {
       },
     })
   }
-  nodeTick.value += 1
+  bumpNodeTick()
   if (canvasVisible.value) {
     nextTick(() => refreshCanvasView(true))
   }
@@ -591,12 +601,12 @@ function createGraph() {
   graph.use(new Keyboard({ enabled: true }))
   // Delete 由页面级快捷键处理，避免与表单输入冲突
   graph.on('node:added', ({ node }) => {
-    nodeTick.value += 1
+    bumpNodeTick()
     if (node) ensureBindings(node)
     markDirty()
   })
   graph.on('node:removed', ({ node }) => {
-    nodeTick.value += 1
+    bumpNodeTick()
     if (node?.id) {
       const next = { ...nodeBindings.value }
       delete next[node.id]
@@ -731,7 +741,7 @@ function ensureNodeStepIo(node) {
       stepInputs: data.stepInputs,
       stepOutputs: data.stepOutputs,
     })
-    nodeTick.value += 1
+    bumpNodeTick()
   }
 }
 
@@ -754,7 +764,7 @@ function learnResponseFieldsFromLogs(logs) {
     next[nodeId] = merged
   }
   learnedResponseFields.value = next
-  if (added > 0) nodeTick.value += 1
+  if (added > 0) bumpNodeTick()
   return added
 }
 
@@ -977,7 +987,7 @@ function onBindingsChange(bindings) {
   applyBindingsToSelectedNode()
   syncWorkflowInputUnion()
   markDirty()
-  nodeTick.value += 1
+  bumpNodeTick()
 }
 
 function onInputFieldsUpdate(next, meta = {}) {
@@ -999,7 +1009,7 @@ function onInputFieldsUpdate(next, meta = {}) {
     nodeBindings.value = renameInputKeyInBindings(nodeBindings.value, meta.renameFrom, meta.renameTo)
   }
   markDirty()
-  nodeTick.value += 1
+  bumpNodeTick()
 }
 
 function collectStepInputUnion() {
@@ -1062,7 +1072,7 @@ function onStepInputsUpdate(next) {
   applyBindingsToSelectedNode()
   syncWorkflowInputUnion()
   markDirty()
-  nodeTick.value += 1
+  bumpNodeTick()
 }
 
 function onStepOutputsUpdate(next) {
@@ -1082,7 +1092,7 @@ function writeStepOutputs(nodeId, next) {
   const cleaned = normalizeStepOutputs(next, { withDefault: true })
   patchNodeData(node, { stepOutputs: cleaned })
   markDirty()
-  nodeTick.value += 1
+  bumpNodeTick()
 }
 
 function onOutputSchemaUpdate(next) {
@@ -1136,7 +1146,7 @@ function onAddCustomField(field) {
   }
   syncWorkflowInputUnion()
   markDirty()
-  nodeTick.value += 1
+  bumpNodeTick()
 }
 
 function onRemoveCustomField(key) {
@@ -1158,7 +1168,7 @@ function onRemoveCustomField(key) {
   }
   syncWorkflowInputUnion()
   markDirty()
-  nodeTick.value += 1
+  bumpNodeTick()
 }
 
 function applyBindingsToSelectedNode() {
@@ -1540,7 +1550,7 @@ async function bootstrap() {
     createGraph()
     resizeGraphCanvas()
     syncZoomPercent()
-    nodeTick.value += 1
+    bumpNodeTick()
     if (route.params.id) {
       const detail = await getWorkflow(route.params.id)
       const wf = detail.data || {}
@@ -1573,7 +1583,7 @@ async function bootstrap() {
           type: prev.type || item.type,
         }
       })
-      nodeTick.value += 1
+      bumpNodeTick()
       const first = chainNodes.value[0]
       if (first) selectNode(first.id)
     }
@@ -1667,7 +1677,7 @@ function updateNodeName(name) {
   const data = { ...node.getData(), componentName: name }
   node.setData(data)
   selectedData.value = data
-  nodeTick.value += 1
+  bumpNodeTick()
   markDirty()
 }
 

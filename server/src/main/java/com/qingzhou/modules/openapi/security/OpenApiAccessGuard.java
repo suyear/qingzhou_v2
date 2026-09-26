@@ -3,12 +3,12 @@ package com.qingzhou.modules.openapi.security;
 import com.qingzhou.common.api.ResultCode;
 import com.qingzhou.common.constant.RedisKeys;
 import com.qingzhou.common.exception.BizException;
+import com.qingzhou.common.web.ClientIpResolver;
 import com.qingzhou.infra.redis.RedisOps;
 import com.qingzhou.modules.openapi.entity.OpenapiApp;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -18,6 +18,7 @@ import java.time.Instant;
 public class OpenApiAccessGuard {
 
     private final RedisOps redisOps;
+    private final ClientIpResolver clientIpResolver;
 
     public void check(OpenapiApp app, HttpServletRequest request) {
         String clientIp = clientIp(request);
@@ -35,18 +36,7 @@ public class OpenApiAccessGuard {
         }
     }
 
-    public static String clientIp(HttpServletRequest request) {
-        if (request == null) {
-            return "";
-        }
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (StringUtils.hasText(forwarded)) {
-            return IpRules.normalize(forwarded.split(",")[0]);
-        }
-        String realIp = request.getHeader("X-Real-IP");
-        if (StringUtils.hasText(realIp)) {
-            return IpRules.normalize(realIp);
-        }
-        return IpRules.normalize(request.getRemoteAddr());
+    public String clientIp(HttpServletRequest request) {
+        return clientIpResolver.resolve(request);
     }
 }

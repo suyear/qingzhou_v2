@@ -4,9 +4,12 @@ import com.qingzhou.modules.execution.engine.auth.DigestAuthHandler;
 import com.qingzhou.modules.execution.engine.auth.MtlsHttpClientFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -20,17 +23,26 @@ import java.util.Optional;
 
 /**
  * 节点 HTTP 调用。支持 Digest 二次挑战与 mTLS 自定义客户端。
+ * 出站前校验 SSRF；不跟随重定向；响应体硬上限防 OOM。
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class NodeHttpInvoker {
 
+    public static final int DEFAULT_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
+
     private final MtlsHttpClientFactory mtlsHttpClientFactory;
+
+    @Value("${qingzhou.http.allow-private-network:false}")
+    private boolean allowPrivateNetwork;
+
+    @Value("${qingzhou.http.max-response-bytes:2097152}")
+    private int maxResponseBytes;
 
     private final HttpClient defaultClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
-            .followRedirects(HttpClient.Redirect.NORMAL)
+            .followRedirects(HttpClient.Redirect.NEVER)
             .build();
 
     public HttpCallResult invoke(String method, URI uri, Map<String, String> headers, String body, int timeoutMs) {
@@ -44,6 +56,11 @@ public class NodeHttpInvoker {
             String body,
             int timeoutMs,
             OutboundAuthResolver.ResolvedAuth auth) {
+        try {
+            OutboundUrlGuard.validate(uri, allowPrivateNetwork);
+        } catch (com.qingzhou.common.exception.BizException ex) {
+            return new HttpCallResult(0, null, false, ex.getMessage(), Map.of());
+        }
         HttpClient client = defaultClient;
         if (auth != null && auth.mtlsCredentialId() != null) {
             client = mtlsHttpClientFactory.getClient(auth.mtlsCredentialId());
@@ -95,8 +112,15 @@ public class NodeHttpInvoker {
                         ? headers.get("Content-Type") : "application/json");
                 builder.method(verb, HttpRequest.BodyPublishers.ofString(body == null ? "" : body, StandardCharsets.UTF_8));
             }
-            HttpResponse<String> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            return new HttpCallResult(response.statusCode(), response.body(), false, null, response.headers().map());
+            HttpResponse<InputStream> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+            int limit = maxResponseBytes > 0 ? maxResponseBytes : DEFAULT_BODY_LIMIT_BYTES;
+            ReadBody read = readLimited(response.body(), limit);
+            if (read.truncated()) {
+                log.warn("节点 HTTP 响应体超限 uri={} limit={}", uri, limit);
+                return new HttpCallResult(response.statusCode(), read.text(), false,
+                        "第三方响应体超过上限 " + limit + " 字节", response.headers().map());
+            }
+            return new HttpCallResult(response.statusCode(), read.text(), false, null, response.headers().map());
         } catch (java.net.http.HttpTimeoutException timeout) {
             log.warn("节点 HTTP 超时 uri={}", uri);
             return new HttpCallResult(0, null, true, "第三方接口超时", Map.of());
@@ -109,6 +133,36 @@ public class NodeHttpInvoker {
         }
     }
 
+    static ReadBody readLimited(InputStream in, int limit) throws Exception {
+        if (in == null) {
+            return new ReadBody("", false);
+        }
+        try (InputStream stream = in; ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[8192];
+            int total = 0;
+            int n;
+            while ((n = stream.read(buf)) >= 0) {
+                if (n == 0) {
+                    continue;
+                }
+                if (total + n > limit) {
+                    int keep = Math.max(0, limit - total);
+                    if (keep > 0) {
+                        out.write(buf, 0, keep);
+                    }
+                    // drain remainder to free connection, but mark truncated
+                    while (stream.read(buf) >= 0) {
+                        // discard
+                    }
+                    return new ReadBody(out.toString(StandardCharsets.UTF_8), true);
+                }
+                out.write(buf, 0, n);
+                total += n;
+            }
+            return new ReadBody(out.toString(StandardCharsets.UTF_8), false);
+        }
+    }
+
     private static String extractWwwAuthenticate(HttpCallResult result) {
         if (result == null || result.responseHeaders() == null) {
             return null;
@@ -118,5 +172,8 @@ public class NodeHttpInvoker {
                 .map(Map.Entry::getValue)
                 .findFirst();
         return values.filter(list -> !list.isEmpty()).map(list -> list.get(0)).orElse(null);
+    }
+
+    record ReadBody(String text, boolean truncated) {
     }
 }

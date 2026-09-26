@@ -9,6 +9,7 @@ import com.qingzhou.modules.execution.dto.RunResultVO;
 import com.qingzhou.modules.execution.dto.TryRunRequest;
 import com.qingzhou.modules.execution.engine.WorkflowEngine;
 import com.qingzhou.modules.execution.support.ExecutionResultAssembler;
+import com.qingzhou.modules.workflow.dto.WorkflowListVO;
 import com.qingzhou.modules.workflow.dto.WorkflowSaveRequest;
 import com.qingzhou.modules.workflow.dto.WorkflowVO;
 import com.qingzhou.modules.workflow.entity.Workflow;
@@ -35,15 +36,29 @@ public class WorkflowController {
     private final ExecutionResultAssembler executionResultAssembler;
 
     @GetMapping
-    public R<IPage<Workflow>> page(PageQuery query, @RequestParam(required = false) String status) {
+    public R<IPage<WorkflowListVO>> page(PageQuery query, @RequestParam(required = false) String status) {
         LambdaQueryWrapper<Workflow> wrapper = new LambdaQueryWrapper<>();
-        wrapper.and(StringUtils.hasText(query.getKeyword()), w -> w
+        wrapper.select(
+                        Workflow::getId,
+                        Workflow::getWorkflowCode,
+                        Workflow::getWorkflowName,
+                        Workflow::getDescription,
+                        Workflow::getStatus,
+                        Workflow::getVersion,
+                        Workflow::getCredentialMode,
+                        Workflow::getCredentialId,
+                        Workflow::getTimeoutMs,
+                        Workflow::getPublishTime,
+                        Workflow::getCreateTime,
+                        Workflow::getUpdateTime)
+                .and(StringUtils.hasText(query.getKeyword()), w -> w
                         .like(Workflow::getWorkflowName, query.getKeyword())
                         .or()
                         .like(Workflow::getWorkflowCode, query.getKeyword()))
                 .eq(StringUtils.hasText(status), Workflow::getStatus, status)
                 .orderByDesc(Workflow::getUpdateTime);
-        return R.ok(workflowService.page(new Page<>(query.getCurrent(), query.getSize()), wrapper));
+        return R.ok(workflowService.page(new Page<>(query.getCurrent(), query.getSize()), wrapper)
+                .convert(WorkflowListVO::from));
     }
 
     @GetMapping("/{id}")

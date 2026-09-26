@@ -12,6 +12,7 @@ import com.qingzhou.modules.component.dto.ComponentTestRequest;
 import com.qingzhou.modules.component.dto.ComponentTestVO;
 import com.qingzhou.modules.component.entity.ApiComponent;
 import com.qingzhou.modules.component.service.ApiComponentService;
+import com.qingzhou.modules.component.support.ComponentSecretsMasker;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.util.StringUtils;
@@ -50,7 +51,8 @@ public class ApiComponentController {
                 .eq(isPreset != null, ApiComponent::getIsPreset, isPreset)
                 .eq(StringUtils.hasText(httpMethod), ApiComponent::getHttpMethod, httpMethod)
                 .orderByDesc(ApiComponent::getUpdateTime);
-        return R.ok(apiComponentService.page(new Page<>(query.getCurrent(), query.getSize()), wrapper));
+        return R.ok(apiComponentService.page(new Page<>(query.getCurrent(), query.getSize()), wrapper)
+                .convert(ComponentSecretsMasker::maskForCurrentUser));
     }
 
     @GetMapping("/{id}")
@@ -59,7 +61,7 @@ public class ApiComponentController {
         if (component == null) {
             throw new BizException(ResultCode.NOT_FOUND, "接口组件不存在");
         }
-        return R.ok(component);
+        return R.ok(ComponentSecretsMasker.maskForCurrentUser(component));
     }
 
     @PostMapping

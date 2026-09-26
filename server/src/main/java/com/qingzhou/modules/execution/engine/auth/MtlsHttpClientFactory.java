@@ -104,7 +104,8 @@ public class MtlsHttpClientFactory {
             return HttpClient.newBuilder()
                     .sslContext(sslContext)
                     .connectTimeout(Duration.ofSeconds(5))
-                    .followRedirects(HttpClient.Redirect.NORMAL)
+                    // 禁止自动跟随重定向，避免 30x 跳到内网绕过 SSRF 校验
+                    .followRedirects(HttpClient.Redirect.NEVER)
                     .build();
         } catch (BizException ex) {
             throw ex;

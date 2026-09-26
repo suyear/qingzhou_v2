@@ -37,4 +37,14 @@ public final class RedisKeys {
     public static String oauth2Token(Long credentialId) {
         return "qz:oauth2:token:" + credentialId;
     }
+
+    /** 登录失败计数：qz:auth:login-fail:{username}:{ip} */
+    public static String loginFail(String username, String clientIp) {
+        return "qz:auth:login-fail:" + username + ":" + clientIp;
+    }
+
+    /** 用户启用状态短缓存：qz:auth:user-status:{userId} */
+    public static String userStatus(Long userId) {
+        return "qz:auth:user-status:" + userId;
+    }
 }

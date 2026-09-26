@@ -5,6 +5,7 @@ import com.qingzhou.common.api.R;
 import com.qingzhou.common.api.ResultCode;
 import com.qingzhou.modules.auth.security.JwtAuthenticationFilter;
 import com.qingzhou.modules.auth.security.LicenseWriteGuardFilter;
+import com.qingzhou.modules.auth.security.MustChangePasswordFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -29,6 +30,7 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final LicenseWriteGuardFilter licenseWriteGuardFilter;
+    private final MustChangePasswordFilter mustChangePasswordFilter;
     private final ObjectMapper objectMapper;
 
     @Bean
@@ -45,6 +47,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/health", "/api/auth/login", "/api/auth/bootstrap", "/api/auth/bootstrap-status")
                         .permitAll()
                         .requestMatchers("/openapi/**").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/**").denyAll()
                         .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/api/v3/api-docs/**", "/v3/api-docs/**")
                         .hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/auth/me").authenticated()
@@ -56,7 +60,13 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.PUT, "/api/**").hasAnyRole("ADMIN", "DEVELOPER")
                         .requestMatchers(HttpMethod.PATCH, "/api/**").hasAnyRole("ADMIN", "DEVELOPER")
                         .requestMatchers(HttpMethod.DELETE, "/api/**").hasAnyRole("ADMIN", "DEVELOPER")
-                        .anyRequest().permitAll()
+                        .anyRequest().denyAll()
+                )
+                .headers(headers -> headers
+                        .contentTypeOptions(Customizer.withDefaults())
+                        .frameOptions(frame -> frame.sameOrigin())
+                        .referrerPolicy(referrer -> referrer.policy(
+                                org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
                 )
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, e) -> {
@@ -73,7 +83,8 @@ public class SecurityConfig {
                         })
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(licenseWriteGuardFilter, JwtAuthenticationFilter.class);
+                .addFilterAfter(licenseWriteGuardFilter, JwtAuthenticationFilter.class)
+                .addFilterAfter(mustChangePasswordFilter, LicenseWriteGuardFilter.class);
         return http.build();
     }
 }

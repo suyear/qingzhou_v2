@@ -9,8 +9,10 @@ import com.qingzhou.common.exception.BizException;
 import com.qingzhou.modules.credential.entity.Credential;
 import com.qingzhou.modules.credential.service.CredentialService;
 import com.qingzhou.modules.credential.support.HttpAuthCredentialSupport;
+import com.qingzhou.modules.execution.engine.OutboundUrlGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -37,7 +39,11 @@ public class OAuth2ClientCredentialsClient {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
+            .followRedirects(HttpClient.Redirect.NEVER)
             .build();
+
+    @Value("${qingzhou.http.allow-private-network:false}")
+    private boolean allowPrivateNetwork;
 
     public String getAccessToken(Long credentialId) {
         Credential credential = credentialService.getById(credentialId);
@@ -72,12 +78,14 @@ public class OAuth2ClientCredentialsClient {
         }
 
         try {
+            URI tokenUri = URI.create(tokenUrl);
+            OutboundUrlGuard.validate(tokenUri, allowPrivateNetwork);
             String body = "grant_type=client_credentials"
                     + (StringUtils.hasText(scope) ? "&scope=" + URLEncoder.encode(scope, StandardCharsets.UTF_8) : "");
             String basic = Base64.getEncoder().encodeToString(
                     (clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(tokenUrl))
+                    .uri(tokenUri)
                     .timeout(Duration.ofSeconds(15))
                     .header("Authorization", "Basic " + basic)
                     .header("Content-Type", "application/x-www-form-urlencoded")
@@ -88,7 +96,11 @@ public class OAuth2ClientCredentialsClient {
                 throw new BizException(ResultCode.THIRD_PARTY_ERROR,
                         "OAuth2 换票失败 HTTP " + response.statusCode());
             }
-            Map<String, Object> json = objectMapper.readValue(response.body(), new TypeReference<>() {
+            String responseBody = response.body();
+            if (responseBody != null && responseBody.length() > 65536) {
+                throw new BizException(ResultCode.THIRD_PARTY_ERROR, "OAuth2 响应体过大");
+            }
+            Map<String, Object> json = objectMapper.readValue(responseBody, new TypeReference<>() {
             });
             Object token = json.get("access_token");
             if (token == null || !StringUtils.hasText(String.valueOf(token))) {

@@ -23,6 +23,10 @@ import com.qingzhou.modules.auth.mapper.SysUserRoleMapper;
 import com.qingzhou.modules.auth.security.AuthContext;
 import com.qingzhou.modules.auth.security.AuthUserPrincipal;
 import com.qingzhou.modules.auth.security.JwtTokenService;
+import com.qingzhou.common.web.ClientIpResolver;
+import com.qingzhou.common.constant.RedisKeys;
+import com.qingzhou.infra.redis.RedisOps;
+import com.qingzhou.modules.auth.security.LoginRateLimiter;
 import com.qingzhou.modules.license.service.LicenseService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +36,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -48,8 +54,11 @@ public class AuthService {
     private final SysPermissionMapper permissionMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService jwtTokenService;
-    private final LicenseService licenseService;
     private final AuditLogService auditLogService;
+    private final LicenseService licenseService;
+    private final ClientIpResolver clientIpResolver;
+    private final LoginRateLimiter loginRateLimiter;
+    private final RedisOps redisOps;
 
     public Map<String, Object> bootstrapStatus() {
         long count = userMapper.selectCount(new LambdaQueryWrapper<SysUser>().eq(SysUser::getDeleted, 0));
@@ -76,24 +85,29 @@ public class AuthService {
     }
 
     public AuthSessionVO login(LoginRequest request, HttpServletRequest httpRequest) {
+        String ip = clientIp(httpRequest);
+        String username = request.getUsername() == null ? "" : request.getUsername().trim();
+        loginRateLimiter.assertAllowed(username, ip);
         SysUser user = userMapper.selectOne(new LambdaQueryWrapper<SysUser>()
-                .eq(SysUser::getUsername, request.getUsername().trim())
+                .eq(SysUser::getUsername, username)
                 .eq(SysUser::getDeleted, 0)
                 .last("LIMIT 1"));
         if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            auditLogService.record(null, request.getUsername(), "USER_LOGIN", "USER", null,
-                    "FAIL", "用户名或密码错误", clientIp(httpRequest));
+            loginRateLimiter.onFailure(username, ip);
+            auditLogService.record(null, username, "USER_LOGIN", "USER", null,
+                    "FAIL", "用户名或密码错误", ip);
             throw new BizException(ResultCode.UNAUTHORIZED, "用户名或密码错误");
         }
         if (user.getStatus() == null || user.getStatus() != 1) {
             throw new BizException(ResultCode.FORBIDDEN, "账号已停用");
         }
+        loginRateLimiter.onSuccess(username, ip);
         user.setLastLoginAt(LocalDateTime.now());
-        user.setLastLoginIp(clientIp(httpRequest));
+        user.setLastLoginIp(ip);
         userMapper.updateById(user);
         AuthUserPrincipal principal = loadPrincipal(user);
         auditLogService.record(user.getId(), user.getUsername(), "USER_LOGIN", "USER",
-                String.valueOf(user.getId()), "SUCCESS", "登录成功", clientIp(httpRequest));
+                String.valueOf(user.getId()), "SUCCESS", "登录成功", ip);
         return issueSession(principal, httpRequest);
     }
 
@@ -144,7 +158,19 @@ public class AuthService {
                         .eq(SysUser::getDeleted, 0)
                         .like(StringUtils.hasText(query.getKeyword()), SysUser::getUsername, query.getKeyword())
                         .orderByDesc(SysUser::getId));
-        return page.convert(this::toVo);
+        List<SysUser> records = page.getRecords();
+        if (records == null || records.isEmpty()) {
+            return page.convert(this::toVo);
+        }
+        List<Long> userIds = records.stream().map(SysUser::getId).toList();
+        Map<Long, List<String>> rolesByUser = new HashMap<>();
+        for (SysUserMapper.UserRoleCodeRow row : userMapper.selectRoleCodesByUserIds(userIds)) {
+            if (row == null || row.userId() == null || !StringUtils.hasText(row.roleCode())) {
+                continue;
+            }
+            rolesByUser.computeIfAbsent(row.userId(), ignored -> new ArrayList<>()).add(row.roleCode());
+        }
+        return page.convert(user -> toVo(user, rolesByUser.getOrDefault(user.getId(), List.of())));
     }
 
     @Transactional
@@ -185,6 +211,7 @@ public class AuthService {
         }
         user.setUpdateBy(AuthContext.currentUsername());
         userMapper.updateById(user);
+        redisOps.delete(RedisKeys.userStatus(id));
         userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, id));
         assignRoles(id, request.getRoles());
         auditLogService.recordCurrent("USER_UPDATE", "USER", String.valueOf(id),
@@ -201,6 +228,7 @@ public class AuthService {
         user.setStatus(0);
         user.setUpdateBy(AuthContext.currentUsername());
         userMapper.updateById(user);
+        redisOps.delete(RedisKeys.userStatus(id));
         auditLogService.recordCurrent("USER_DISABLE", "USER", String.valueOf(id),
                 "SUCCESS", "停用用户 " + user.getUsername());
     }
@@ -287,26 +315,23 @@ public class AuthService {
     }
 
     private UserVO toVo(SysUser user) {
+        return toVo(user, userMapper.selectRoleCodesByUserId(user.getId()));
+    }
+
+    private UserVO toVo(SysUser user, List<String> roles) {
         return UserVO.builder()
                 .id(user.getId())
                 .username(user.getUsername())
                 .displayName(user.getDisplayName())
                 .status(user.getStatus())
                 .mustChangePassword(user.getMustChangePassword())
-                .roles(userMapper.selectRoleCodesByUserId(user.getId()))
+                .roles(roles == null ? List.of() : roles)
                 .lastLoginAt(user.getLastLoginAt())
                 .createTime(user.getCreateTime())
                 .build();
     }
 
     private String clientIp(HttpServletRequest request) {
-        if (request == null) {
-            return null;
-        }
-        String xff = request.getHeader("X-Forwarded-For");
-        if (StringUtils.hasText(xff)) {
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return clientIpResolver.resolve(request);
     }
 }
