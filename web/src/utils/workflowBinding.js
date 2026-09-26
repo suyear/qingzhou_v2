@@ -466,36 +466,138 @@ export function defaultBinding(field, upstreamNodes) {
   return binding
 }
 
-/** 在上游节点字段中找同名（忽略大小写）或常见 id 别名 */
+function leafName(path) {
+  return String(path || '').split('.').pop().replace(/\[\d+\]/g, '')
+}
+
+function pathPool(node) {
+  const names = [...(node?.responseFields || node?.fields || [])]
+  for (const port of node?.outputPorts || []) {
+    const path = String(port?.fromPath || '').replace(/^\$\.?/, '').trim()
+    if (path && path !== '*' && path !== '$') names.push(path)
+  }
+  return [...new Set(names)]
+}
+
+function pickNamedField(names, lower) {
+  const exact = names.find((name) => String(name).toLowerCase() === lower)
+  if (exact) return exact
+  const leaves = names.filter((name) => leafName(name).toLowerCase() === lower)
+  return leaves.find((name) => String(name).startsWith('rows[0].')) || leaves[0] || null
+}
+
+/** 在上游节点字段中找同名（忽略大小写）或常见 id 别名。优先最近的前序步骤。 */
 export function findUpstreamFieldMatch(upstreamNodes, fieldKey) {
   const key = String(fieldKey || '').trim()
   if (!key || !upstreamNodes?.length) return null
   const lower = key.toLowerCase()
-  for (const node of upstreamNodes) {
-    const responseFields = node.responseFields || node.fields || []
-    const requestFields = node.requestFields || []
-    for (const name of responseFields) {
-      if (String(name).toLowerCase() === lower) {
-        return { nodeId: node.id, field: name, fromSource: 'output' }
+  const ordered = [...upstreamNodes].reverse()
+  for (const node of ordered) {
+    const named = pickNamedField(pathPool(node), lower)
+    if (named) return { nodeId: node.id, field: named, fromSource: 'output' }
+    for (const port of node.outputPorts || []) {
+      if (String(port?.key || '').toLowerCase() !== lower) continue
+      const path = String(port.fromPath || '').replace(/^\$\.?/, '').trim()
+      if (!path || path === '*' || path === '$') continue
+      return { nodeId: node.id, field: path, fromSource: 'output' }
+    }
+    // userId / order_id → 这一步结果里的 id，先于「上一步填过的同名项」
+    if (/Id$/i.test(key) || /_id$/i.test(key)) {
+      const pool = pathPool(node)
+      for (const candidate of ['id', 'rows[0].id']) {
+        if (pool.includes(candidate)) {
+          return { nodeId: node.id, field: candidate, fromSource: 'output' }
+        }
       }
     }
-    for (const name of requestFields) {
+    for (const name of node.requestFields || []) {
       if (String(name).toLowerCase() === lower) {
         return { nodeId: node.id, field: name, fromSource: 'request' }
       }
     }
   }
-  // userId / order_id → 上游 id / rows[0].id
-  if (/Id$/i.test(key) || /_id$/i.test(key)) {
-    const last = upstreamNodes[upstreamNodes.length - 1]
-    const pool = [...(last.responseFields || last.fields || [])]
-    for (const candidate of ['id', 'rows[0].id']) {
-      if (pool.includes(candidate)) {
-        return { nodeId: last.id, field: candidate, fromSource: 'output' }
-      }
-    }
-  }
   return null
+}
+
+/** 给人看的字段名，避免露出 $.path */
+export function plainFieldName(name) {
+  const raw = String(name || '').trim()
+  if (!raw || raw === '*' || raw === '__whole__' || raw === '$') return '整份结果'
+  if (raw === 'rows') return '全部数据行'
+  if (raw === 'rowCount') return '一共多少行'
+  if (raw === 'truncated') return '是否被截断'
+  const rowCol = raw.match(/^rows\[0\]\.(.+)$/)
+  if (rowCol) return `第一行的「${rowCol[1]}」`
+  return `「${raw}」`
+}
+
+/** 前序步骤可交给本步的结果项（不含“上一步填过的内容”） */
+export function handoffOptionsForStep(step) {
+  const options = [{
+    fromField: '__whole__',
+    fromSource: 'output',
+    label: '整份结果',
+    hint: '后面的步骤拿到这一步的全部内容',
+  }]
+  const seen = new Set(['__whole__'])
+  const push = (fromField, label, hint) => {
+    const field = String(fromField || '').trim()
+    if (!field || seen.has(field)) return
+    seen.add(field)
+    options.push({
+      fromField: field,
+      fromSource: 'output',
+      label,
+      hint: hint || '',
+    })
+  }
+  for (const port of step?.outputPorts || []) {
+    const path = String(port?.fromPath || '').replace(/^\$\.?/, '').trim()
+    if (!path || path === '*' || path === '$') continue
+    const title = port.description && port.description !== port.key
+      ? port.description
+      : (port.key || plainFieldName(path))
+    push(path, `${title} · ${plainFieldName(path)}`, port.key ? `交给后面时叫 ${port.key}` : '')
+  }
+  for (const name of step?.responseFields || []) {
+    push(name, plainFieldName(name), '从这一步的结果里取')
+  }
+  return options
+}
+
+/** 上一步已经填进去的内容，收在「更多」里 */
+export function filledOptionsForStep(step) {
+  const options = [{
+    fromField: '__whole__',
+    fromSource: 'request',
+    label: '这一步填过的全部内容',
+    hint: '',
+  }]
+  for (const name of step?.requestFields || []) {
+    options.push({
+      fromField: name,
+      fromSource: 'request',
+      label: plainFieldName(name),
+      hint: '',
+    })
+  }
+  return options
+}
+
+/** 给非技术用户的一条建议：最近前序步骤里同名的结果，不建议「请求」侧 */
+export function suggestHandoff(fieldKey, upstreamSources) {
+  const matched = findUpstreamFieldMatch(upstreamSources, fieldKey)
+  if (!matched || matched.fromSource !== 'output') return null
+  const index = (upstreamSources || []).findIndex((item) => item.id === matched.nodeId)
+  const step = index >= 0 ? upstreamSources[index] : null
+  return {
+    fromNode: matched.nodeId,
+    fromField: matched.field,
+    fromSource: 'output',
+    stepName: step?.name || '',
+    stepIndex: index >= 0 ? index + 1 : null,
+    label: plainFieldName(matched.field),
+  }
 }
 
 /** 汇总本步对上游的依赖，供时间线展示 */
@@ -504,49 +606,49 @@ export function collectUpstreamDeps(bindings, ctx = {}) {
   const deps = []
   for (const binding of bindings || []) {
     if (binding?.mode !== 'upstream' || !binding.fromNode) continue
-    const side = binding.fromSource === 'request' ? '请求' : '响应'
+    const side = binding.fromSource === 'request' ? '填写项' : '结果'
     const depKey = `${binding.fromNode}:${side}`
     if (seen.has(depKey)) continue
     seen.add(depKey)
     const fromIndex = ctx.nodeIndexes?.[binding.fromNode]
-    const stepPrefix = fromIndex != null ? `第${fromIndex}步` : '上游'
+    const stepPrefix = fromIndex != null ? `第 ${fromIndex} 步` : '前面步骤'
     deps.push({
       fromNode: binding.fromNode,
       fromIndex: fromIndex || null,
       fromSource: binding.fromSource === 'request' ? 'request' : 'output',
-      label: `← ${stepPrefix}·${side}`,
+      label: `接到${stepPrefix}的${side}`,
     })
   }
   return deps
 }
 
 export function bindingSummary(binding, field, ctx = {}) {
-  if (!binding) return '未配置'
+  if (!binding) return '还没设置'
   if (binding.mode === 'fixed') {
     const value = String(binding.value ?? '').trim()
-    if (!value) return '未填写'
+    if (!value) return '还没填写'
     const short = value.length > 24 ? `${value.slice(0, 24)}…` : value
-    return `固定值：${short}`
+    return `每次都用「${short}」`
   }
   if (binding.mode === 'upstream') {
     const stepLabel = ctx.nodeNames?.[binding.fromNode]
       || ctx.upstreamName
-      || '上游'
+      || '前面的步骤'
     const stepIndex = ctx.nodeIndexes?.[binding.fromNode]
-    const stepPrefix = stepIndex != null ? `第${stepIndex}步` : stepLabel
-    const side = binding.fromSource === 'request' ? '请求' : '响应'
-    const key = binding.fromField === '__whole__' || binding.fromField === '*'
-      ? '完整'
-      : (binding.fromField || field?.key || '')
-    return `← ${stepPrefix}·${side}·${key}`
+    const where = stepIndex != null ? `第 ${stepIndex} 步「${stepLabel}」` : `「${stepLabel}」`
+    const side = binding.fromSource === 'request' ? '里填写过的' : '交出的'
+    const piece = binding.fromField === '__whole__' || binding.fromField === '*'
+      ? '整份结果'
+      : plainFieldName(binding.fromField || field?.key || '')
+    return `使用${where}${side}${piece}`
   }
   if (binding.mode === 'runtime') {
     const inputKey = binding.inputKey || field?.key || binding.key
     const label = ctx.inputLabels?.[inputKey]
-    if (label && label !== inputKey) return `← 工作流入参「${label}」`
-    return `← 工作流入参 ${inputKey}`
+    if (label && label !== inputKey) return `调用时由外面传入「${label}」`
+    return `调用时由外面传入「${inputKey}」`
   }
-  return '未配置'
+  return '还没设置'
 }
 
 /** 规范化出参配置。forPersist=true 时，空 fields 的投影落库为 merge */
@@ -625,18 +727,18 @@ export function attachLearnedSchemas(schema, learned) {
 export function outputSchemaHint(schema) {
   const normalized = normalizeOutputSchema(schema)
   if (schema?.mode === 'fields' && !(schema.fields || []).length) {
-    return '字段投影尚未配置，对外将按「按步骤合并」返回'
+    return '还没挑字段，调用方会拿到每一步的结果'
   }
   if (normalized.mode === 'fields' && normalized.fields.length) {
-    return `对外出参：JSON 整形 ${normalized.fields.length} 个字段（源：按步骤合并）`
+    return `调用方只拿到挑出的 ${normalized.fields.length} 项`
   }
   if (normalized.mode === 'firstRow') {
-    return '对外出参：查询结果首行对象（与开放 API 一致）'
+    return '调用方只拿到查询结果的第一行'
   }
   if (normalized.mode === 'merge') {
-    return '对外出参：按步骤名合并各步出参（与开放 API 一致）'
+    return '调用方按步骤名拿到每一步交出的内容'
   }
-  return '对外出参：最后一步完整结果（与开放 API 一致）'
+  return '调用方只拿到最后一步的完整结果'
 }
 
 export function stepConfigSummary(bindings, fields, ctx = {}) {

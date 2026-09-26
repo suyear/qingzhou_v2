@@ -786,6 +786,7 @@ function buildBindingsForNode(node, force = false) {
       fields: [...new Set([...(source.responseFields || []), ...(source.requestFields || [])])],
       responseFields: source.responseFields || [],
       requestFields: source.requestFields || [],
+      outputPorts: source.outputPorts || [],
     }
   })
   nodeBindings.value = {
@@ -868,7 +869,7 @@ function addToChain(item, options = {}) {
     : `已添加为第 ${reordered.length} 步`
   ElMessage.success(tip)
   if (before.length > 0) {
-    ElMessage.info({ message: '已按同名尝试从上游取值；可在「取数据」中调整', duration: 2500 })
+    ElMessage.info({ message: '已按同名接到前面步骤的结果，可以在每一项里改', duration: 2500 })
   }
 }
 
@@ -914,7 +915,7 @@ async function removeStep(nodeId) {
   markDirty()
   ElMessage.success('已删除步骤')
   if (broken > 0) {
-    ElMessage.warning(`有 ${broken} 处参数失去上游来源，请重新配置取数据`)
+    ElMessage.warning(`有 ${broken} 处还指着已删除的步骤，请重新选择前面的结果`)
   }
 }
 
@@ -964,7 +965,7 @@ function moveStep(nodeId, direction) {
   markDirty()
   ElMessage.success(direction < 0 ? '已上移一步' : '已下移一步')
   if (broken > 0) {
-    ElMessage.warning(`有 ${broken} 处参数失去上游来源，请重新配置`)
+    ElMessage.warning(`有 ${broken} 处还指着已删除的步骤，请重新选择前面的结果`)
   }
 }
 
@@ -975,7 +976,7 @@ function autoBindUpstreamForSelected() {
   buildBindingsForNode(node, true)
   refreshInputFieldsFromBindings()
   markDirty()
-  ElMessage.success('已按同名/常见别名尝试绑定上游')
+  ElMessage.success('已按同名接到前面步骤的结果')
 }
 
 function onBindingsChange(bindings) {
@@ -1524,7 +1525,7 @@ async function confirmTryRun() {
     }
     logVisible.value = true
     if (slim.status === 'SUCCESS') {
-      const learnTip = learned > 0 ? ` · 已学习 ${learned} 个响应字段，可在「取数据」里选用` : ''
+      const learnTip = learned > 0 ? ` · 已认出 ${learned} 个结果项，下一步可以直接选` : ''
       ElMessage.success(`试运行成功${slim.durationMs != null ? ` · ${slim.durationMs}ms` : ''} · ${outputHint.value}${learnTip}`)
     } else {
       ElMessage.warning(slim.errorMsg || '试运行结束（存在失败节点）')

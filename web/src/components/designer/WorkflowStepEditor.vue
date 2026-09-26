@@ -47,7 +47,7 @@
             :class="{ active: leftTab === 'inputs' }"
             @click="leftTab = 'inputs'"
           >
-            入参 ({{ inputFields.length }})
+            调用时填 ({{ inputFields.length }})
           </button>
           <button
             type="button"
@@ -55,7 +55,7 @@
             :class="{ active: leftTab === 'outputs' }"
             @click="leftTab = 'outputs'"
           >
-            出参
+            最后返回
           </button>
           <button
             type="button"
@@ -111,7 +111,7 @@
                         {{ dep.label }}
                       </span>
                     </span>
-                    <span v-else-if="index > 0" class="timeline-deps muted">未接上游数据</span>
+                    <span v-else-if="index > 0 && !item.configured" class="timeline-deps muted">还有必填项没接上</span>
                     <span v-if="item.summaryLines?.length" class="timeline-summary">
                       <span
                         v-for="line in item.summaryLines.slice(0, 2)"
@@ -163,10 +163,10 @@
           </nav>
 
           <section v-show="leftTab === 'inputs'" class="inputs-panel">
-            <p class="quick-hint">工作流入参 = 各步骤入参的全量并集（发布/试跑/开放 API 共用）。可在此改说明与必填；增删请在各步骤「本步入参」中操作。</p>
+            <p class="quick-hint">调用这个工作流时，外面要准备的内容会自动汇总到这里。可以改说明和是否必填；要增减，请到对应步骤里选「调用时传入」。</p>
             <div v-if="!inputFields.length" class="inputs-empty">
-              <p>还没有工作流入参</p>
-              <p class="inputs-empty-sub">在步骤中添加入参后，会自动汇总到这里</p>
+              <p>调用时暂时不用额外填写</p>
+              <p class="inputs-empty-sub">在某一步选「调用时传入」后，会出现在这里</p>
             </div>
             <div v-for="(row, index) in inputFields" :key="`${row.key}-${index}`" class="input-row">
               <el-input
@@ -189,7 +189,7 @@
           </section>
 
           <section v-show="leftTab === 'outputs'" class="inputs-panel">
-            <p class="quick-hint">默认按步骤名合并各步出参；也可用「JSON 整形」从合并结果投影字段。试运行与开放 API 形态一致。</p>
+            <p class="quick-hint">调用方最后拿到什么。默认把每一步交出的内容按步骤名放在一起，一般不用改。试运行和开放 API 看到的是同一种结果。</p>
             <el-alert
               v-if="workflowStatus === 'PUBLISHED'"
               type="warning"
@@ -202,19 +202,19 @@
             />
             <div class="output-mode">
               <el-radio-group :model-value="outputSchema.mode || 'merge'" @change="onOutputModeChange">
-                <el-radio-button value="merge">按步骤合并</el-radio-button>
-                <el-radio-button value="fields">JSON 整形</el-radio-button>
-                <el-radio-button value="firstRow">查询首行</el-radio-button>
-                <el-radio-button value="last">末步完整</el-radio-button>
+                <el-radio-button value="merge">每步结果都返回</el-radio-button>
+                <el-radio-button value="fields">只挑几个字段</el-radio-button>
+                <el-radio-button value="firstRow">只要查询的第一行</el-radio-button>
+                <el-radio-button value="last">只要最后一步</el-radio-button>
               </el-radio-group>
             </div>
             <p v-if="(outputSchema.mode || 'merge') === 'merge'" class="inputs-empty-sub">
-              对外返回对象，键为步骤名；下方可直接改各步<strong>字段名</strong>（即 API 里看到的 key）。
+              外面会按步骤名拿到每一步交出的内容。下面改的是给别人看的名字。
             </p>
             <template v-if="(outputSchema.mode || 'merge') === 'merge'">
               <div v-if="!allStepSources.length" class="inputs-empty">
                 <p>还没有步骤</p>
-                <p class="inputs-empty-sub">添加步骤并声明出参后，在此编排对外字段名</p>
+                <p class="inputs-empty-sub">添加步骤后，在这里给每一步交出的内容起名字</p>
               </div>
               <div
                 v-for="(step, si) in allStepSources"
@@ -241,7 +241,7 @@
                     @change="(val) => commitPortKeyForStep(step.id, pi, val)"
                   >
                     <template #prefix>
-                      <span class="field-label-prefix">字段名</span>
+                      <span class="field-label-prefix">名字</span>
                     </template>
                   </el-input>
                   <el-select
@@ -250,12 +250,12 @@
                     allow-create
                     default-first-option
                     clearable
-                    placeholder="取值路径"
+                    placeholder="从结果里取哪一项"
                     class="sout-path"
                     @change="(val) => patchPortForStep(step.id, pi, { fromPath: pathFromSelect(val) })"
                     @clear="() => patchPortForStep(step.id, pi, { fromPath: '' })"
                   >
-                    <el-option value="*" label="完整响应" />
+                    <el-option value="*" label="整份结果" />
                     <el-option
                       v-for="name in (step.responseFields || [])"
                       :key="`${step.id}-rf-${name}`"
@@ -292,10 +292,10 @@
                     allow-create
                     default-first-option
                     clearable
-                    placeholder="取值路径（空=完整响应）"
+                    placeholder="从结果里取哪一项（空=整份结果）"
                     style="width: 100%"
                   >
-                    <el-option value="" label="完整响应" />
+                    <el-option value="" label="整份结果" />
                     <el-option
                       v-for="name in (step.responseFields || [])"
                       :key="`draft-${step.id}-${name}`"
@@ -478,19 +478,24 @@
             </el-popconfirm>
           </div>
 
-          <el-alert
-            v-if="upstreamSources.length && selectedIndex > 0"
-            type="info"
-            :closable="false"
-            show-icon
-            class="upstream-alert"
-            :title="refPoolTitle"
-          >
-            <div class="upstream-alert-body">
-              <span>{{ refPoolHint }}</span>
-              <el-button size="small" type="primary" plain @click="emit('auto-bind-upstream')">按同名绑定上游</el-button>
+          <div v-if="selectedIndex > 0 && fields.length" class="handoff-card">
+            <div class="handoff-head">
+              <div>
+                <div class="section-title">和前面怎么接</div>
+                <p class="handoff-lead">每一项可以自己填、调用时由外面传入，或直接用前面某一步交出的结果。</p>
+              </div>
+              <el-button size="small" type="primary" plain @click="emit('auto-bind-upstream')">同名自动接上</el-button>
             </div>
-          </el-alert>
+            <ul v-if="requiredFields.length" class="handoff-list">
+              <li v-for="field in requiredFields" :key="`hand-${field.key}`">
+                <span class="handoff-name">{{ fieldLabel(field) }}</span>
+                <span
+                  class="handoff-text"
+                  :class="{ ok: isFieldConfigured(findBinding(field.key), field) }"
+                >{{ bindingSummary(findBinding(field.key), field, bindingCtx) }}</span>
+              </li>
+            </ul>
+          </div>
 
           <el-form label-position="top" size="default" class="config-form">
             <el-form-item label="步骤名称">
@@ -503,21 +508,18 @@
           </el-form>
 
           <div v-if="!fields.length" class="config-empty">
-            <el-alert type="success" :closable="false" show-icon title="此接口无需填写组件参数，也可自行添加参数" />
+            <el-alert type="success" :closable="false" show-icon title="这一步没有必须填写的内容。下面仍可以设置要交给后面的结果。" />
             <div class="empty-actions">
-              <el-button @click="showAddCustom = true">+ 添加参数</el-button>
+              <el-button @click="showAddCustom = true">+ 再加一项</el-button>
               <el-button type="primary" @click="focusQuickAdd">+ 添加下一步</el-button>
               <el-button type="success" :disabled="!canTryRun" @click="emit('try-run')">试运行</el-button>
             </div>
           </div>
 
           <div v-else class="config-fields">
-            <p v-if="selectedIndex > 0 || inputFields.length" class="ref-pool-summary" :title="refPoolDetail">
-              可引用：工作流入参 {{ inputFields.length }} · 前序请求 {{ upstreamRequestCount }} · 前序响应 {{ upstreamResponseCount }}
-            </p>
             <div v-if="requiredFields.length" class="field-section">
               <div class="section-head">
-                <span class="section-title">本步入参 · 必填</span>
+                <span class="section-title">这一步需要</span>
                 <span class="section-hint">{{ requiredDone }}/{{ requiredFields.length }} 已完成</span>
               </div>
               <WorkflowParamField
@@ -534,7 +536,7 @@
 
             <div v-if="optionalFields.length" class="field-section">
               <button type="button" class="section-toggle" @click="showOptional = !showOptional">
-                <span class="section-title">本步入参 · 可选</span>
+                <span class="section-title">可以不填</span>
                 <span class="section-hint">{{ optionalFields.length }} 项 · {{ showOptional ? '收起' : '展开' }}</span>
               </button>
               <template v-if="showOptional">
@@ -552,7 +554,7 @@
             </div>
 
             <div class="add-param-block">
-              <el-button v-if="!showAddCustom" @click="showAddCustom = true">+ 添加入参</el-button>
+              <el-button v-if="!showAddCustom" @click="showAddCustom = true">+ 再加一项</el-button>
               <div v-else class="add-param-form">
                 <el-input v-model="customDraft.key" placeholder="参数键，如 deptId" />
                 <el-input v-model="customDraft.description" placeholder="说明（选填）" />
@@ -563,15 +565,17 @@
                 </div>
               </div>
             </div>
+          </div>
 
-            <div class="field-section step-outputs-section">
+          <div class="field-section step-outputs-section">
               <div class="section-head">
-                <span class="section-title">本步出参</span>
-                <span class="section-hint">字段名会出现在对外 API / 下一步取数中</span>
+                <span class="section-title">交给后面的内容</span>
+                <span class="section-hint">后面的步骤会按这些名字来用</span>
               </div>
+              <p class="section-hint soft">不需要拆开时，选「整份结果」即可。试运行后，这里会出现结果里的具体项目。</p>
               <div class="sout-col-head" aria-hidden="true">
-                <span>字段名</span>
-                <span>取值路径</span>
+                <span>交给后面的名字</span>
+                <span>从结果里取</span>
                 <span>说明</span>
                 <span></span>
               </div>
@@ -592,12 +596,12 @@
                   allow-create
                   default-first-option
                   clearable
-                  placeholder="从本步响应取值（空=完整）"
+                  placeholder="从这一步的结果里取（空=整份结果）"
                   class="sout-path"
                   @change="(val) => onStepOutputPathChange(index, val)"
                   @clear="() => onStepOutputPathChange(index, '*')"
                 >
-                  <el-option value="*" label="完整响应" />
+                  <el-option value="*" label="整份结果" />
                   <el-option
                     v-for="name in selectedResponseFields"
                     :key="name"
@@ -619,7 +623,7 @@
                   @click="removeStepOutput(index)"
                 >×</button>
               </div>
-              <p v-if="stepOutputs.length <= 1" class="section-hint soft">至少保留一个出参字段；可直接改字段名与取值路径</p>
+              <p v-if="stepOutputs.length <= 1" class="section-hint soft">至少留一项交给后面。名字用英文，方便下一步直接选。</p>
               <div v-if="showAddOutput && !outputDraft.nodeId" class="add-param-form">
                 <el-input
                   ref="outputDraftKeyRef"
@@ -633,10 +637,10 @@
                   allow-create
                   default-first-option
                   clearable
-                  placeholder="取值路径（空=完整响应）"
+                  placeholder="从结果里取哪一项（空=整份结果）"
                   style="width: 100%"
                 >
-                  <el-option value="" label="完整响应" />
+                  <el-option value="" label="整份结果" />
                   <el-option
                     v-for="name in selectedResponseFields"
                     :key="`draft-sel-${name}`"
@@ -656,8 +660,7 @@
                 plain
                 class="add-input-btn"
                 @click="openAddOutput()"
-              >+ 添加出参字段</el-button>
-            </div>
+              >+ 再交一项给后面</el-button>
           </div>
 
           <div v-if="!fields.length && showAddCustom" class="add-param-block">
@@ -705,7 +708,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkflowParamField from './WorkflowParamField.vue'
-import { isFieldConfigured, isValidParamKey, isMetaKey, INPUT_SOURCE_NODE, MERGE_SOURCE_NODE, normalizeFromSource } from '@/utils/workflowBinding'
+import { bindingSummary, fieldLabel, isFieldConfigured, isValidParamKey, isMetaKey, INPUT_SOURCE_NODE, MERGE_SOURCE_NODE, normalizeFromSource } from '@/utils/workflowBinding'
 import { CATEGORY_LABEL } from '@/utils/schema'
 
 const props = defineProps({
@@ -790,31 +793,18 @@ const nextStepLabel = computed(() => {
   if (selectedIndex.value >= props.chainNodes.length - 1) return '添加下一步'
   return '下一步 →'
 })
-const upstreamRequestCount = computed(() =>
-  props.upstreamSources.reduce((sum, step) => sum + (step.requestFields?.length || 0) + 1, 0),
-)
-const upstreamResponseCount = computed(() =>
-  props.upstreamSources.reduce((sum, step) => sum + (step.responseFields?.length || 0) + 1, 0),
-)
-const refPoolTitle = computed(() => {
-  if (!props.upstreamSources.length) return '可引用工作流入参'
-  return `可引用：入参 ${props.inputFields.length} · 前序 ${props.upstreamSources.length} 步`
-})
-const refPoolHint = computed(() => {
-  const names = props.upstreamSources.map((step, i) => `第${i + 1}步「${step.name}」`).join('、')
-  return `工作流入参、以及 ${names} 的请求与响应，均可在参数「取数据」中选用。`
-})
-const refPoolDetail = computed(() => {
-  const lines = []
-  if (props.inputFields.length) {
-    lines.push(`工作流入参：${props.inputFields.map((item) => item.key).join(', ')}`)
-  }
-  props.upstreamSources.forEach((step, i) => {
-    const req = (step.requestFields || []).join(', ') || '（整包）'
-    const res = (step.responseFields || []).join(', ') || '（整包 / 试跑后补字段）'
-    lines.push(`第${i + 1}步 ${step.name} · 请求[${req}] · 响应[${res}]`)
+const bindingCtx = computed(() => {
+  const nodeNames = {}
+  const nodeIndexes = {}
+  props.chainNodes.forEach((item, index) => {
+    nodeNames[item.id] = item.name
+    nodeIndexes[item.id] = index + 1
   })
-  return lines.join('\n')
+  const inputLabels = {}
+  for (const item of props.inputFields || []) {
+    inputLabels[item.key] = item.description || item.key
+  }
+  return { nodeNames, nodeIndexes, inputLabels }
 })
 const filteredComponents = computed(() => {
   const kw = pickerKeyword.value.trim()
@@ -1340,7 +1330,7 @@ function goStep(delta) {
   if (delta > 0) {
     const current = props.chainNodes[selectedIndex.value]
     if (current && !current.configured) {
-      ElMessage.warning('请先完成本步必填参数')
+      ElMessage.warning('请先填完这一步必须要的内容')
       return
     }
     const pending = props.chainNodes.find((item, i) => i > selectedIndex.value && !item.configured)
@@ -1439,11 +1429,12 @@ function focusQuickAdd() {
 }
 .left-tab {
   flex: 1;
-  padding: 10px 4px;
+  padding: 8px 2px;
   border: none;
   background: transparent;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.3;
   color: var(--qz-text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -1531,6 +1522,43 @@ function focusQuickAdd() {
 }
 .insert-plus { font-size: 14px; line-height: 1; }
 .insert-alert { margin-bottom: 10px; }
+.handoff-card {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: var(--qz-radius);
+  background: var(--qz-primary-soft);
+  border: 1px solid var(--el-color-primary-light-7);
+}
+.handoff-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.handoff-lead {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.5;
+}
+.handoff-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.handoff-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.handoff-name { font-weight: 600; }
+.handoff-text { color: var(--el-color-warning-dark-2); }
+.handoff-text.ok { color: var(--el-color-success-dark-2); }
 .upstream-alert { margin: 0 0 12px; }
 .upstream-alert-body {
   display: flex;

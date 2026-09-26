@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:unit": "node src/utils/triggerInput.test.js && node src/utils/charts.test.js && node src/utils/detailText.test.js && node src/utils/sqlParams.test.js"
+    "test:unit": "node src/utils/triggerInput.test.js && node src/utils/charts.test.js && node src/utils/detailText.test.js && node src/utils/sqlParams.test.js && node src/utils/workflowBinding.test.js"
   },
   "dependencies": {
     "@antv/x6": "^2.19.2",

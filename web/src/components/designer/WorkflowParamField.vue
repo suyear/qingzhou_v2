@@ -3,7 +3,7 @@
     <div class="param-head">
       <div class="param-title">
         <div class="param-label">{{ fieldLabel(field) }}</div>
-        <div v-if="field.key" class="param-key" :title="field.key">
+        <div v-if="field.key && fieldLabel(field) !== field.key" class="param-key" :title="field.key">
           {{ field.key }}
           <span v-if="field.custom" class="custom-mark">自定义</span>
         </div>
@@ -15,27 +15,39 @@
         v-if="field.custom"
         type="button"
         class="remove-btn"
-        title="移除此参数"
+        title="移除此项"
         @click="emit('remove', field.key)"
       >×</button>
     </div>
 
-    <div class="mode-switch">
-      <button
-        type="button"
-        class="mode-chip"
-        :class="{ active: mode === 'fixed' }"
-        @click="onModeChange('fixed')"
-      >固定值</button>
-      <button
-        type="button"
-        class="mode-chip"
-        :class="{ active: mode === 'data' }"
-        @click="onModeChange('data')"
-      >取数据</button>
+    <div v-if="suggestion && !suggestionApplied" class="suggest">
+      <span>建议：用第 {{ suggestion.stepIndex }} 步「{{ suggestion.stepName }}」交出的{{ suggestion.label }}</span>
+      <button type="button" class="suggest-btn" @click="applySuggestion">就用这个</button>
     </div>
 
-    <div v-if="mode === 'fixed'" class="param-value">
+    <div class="mode-switch" role="tablist">
+      <button
+        type="button"
+        class="mode-chip"
+        :class="{ active: choice === 'fixed' }"
+        @click="chooseFixed"
+      >自己填写</button>
+      <button
+        type="button"
+        class="mode-chip"
+        :class="{ active: choice === 'caller' }"
+        @click="chooseCaller"
+      >调用时传入</button>
+      <button
+        type="button"
+        class="mode-chip"
+        :class="{ active: choice === 'previous' }"
+        :disabled="!upstreamSources.length"
+        @click="choosePrevious"
+      >用前面步骤的结果</button>
+    </div>
+
+    <div v-if="choice === 'fixed'" class="param-value">
       <el-select
         v-if="field.enums?.length"
         :model-value="binding.value ?? ''"
@@ -52,91 +64,107 @@
         :model-value="binding.value ?? ''"
         type="textarea"
         :rows="2"
-        :placeholder="field.type === 'array' ? '多个值用逗号分隔' : '{ }'"
+        :placeholder="field.type === 'array' ? '多个值用逗号分隔' : '按接口要求填写'"
         @input="(val) => emitChange({ mode: 'fixed', value: val })"
       />
       <el-input
         v-else
         :model-value="binding.value ?? ''"
-        :placeholder="field.description || '请输入固定值'"
+        :placeholder="field.description || '每次运行都用这个内容'"
         @input="(val) => emitChange({ mode: 'fixed', value: val })"
       />
     </div>
 
-    <div v-else-if="mode === 'data'" class="param-value">
-      <div class="data-box">
-        <el-select
-          :model-value="sourceValue"
-          filterable
-          allow-create
-          default-first-option
-          placeholder="选择数据来源，或输入工作流入参键"
-          style="width: 100%"
-          @change="onSourceChange"
+    <div v-else-if="choice === 'caller'" class="param-value">
+      <p class="lead">调用这个工作流时，由外面填写。</p>
+      <el-select
+        :model-value="callerValue"
+        filterable
+        allow-create
+        default-first-option
+        placeholder="选一项，或起一个新名字"
+        style="width: 100%"
+        @change="onCallerChange"
+      >
+        <el-option :value="field.key" :label="`就用「${fieldLabel(field)}」`" />
+        <el-option
+          v-for="item in otherInputs"
+          :key="item.key"
+          :value="item.key"
+          :label="inputOptionLabel(item)"
+        />
+      </el-select>
+    </div>
+
+    <div v-else class="param-value">
+      <p class="lead">选前面哪一步，再选它交出的哪一项。</p>
+      <div class="step-picks">
+        <button
+          v-for="(step, index) in upstreamSources"
+          :key="step.id"
+          type="button"
+          class="step-pick"
+          :class="{ active: activeStepId === step.id }"
+          @click="pickStep(step)"
         >
-          <el-option-group label="工作流入参">
-            <el-option
-              :value="`input:${field.key}`"
-              :label="`同名入参（${field.key}）`"
-            />
-            <el-option
-              v-for="item in inputFields"
-              :key="`input:${item.key}`"
-              :value="`input:${item.key}`"
-              :label="inputOptionLabel(item)"
-            />
-          </el-option-group>
-          <template v-for="(step, index) in upstreamSources" :key="step.id">
-            <el-option-group :label="`第 ${index + 1} 步 · 入参 · ${step.name}`">
-              <el-option
-                :value="`${step.id}:request:*`"
-                label="完整请求"
-              />
-              <el-option
-                v-for="name in step.requestFields"
-                :key="`${step.id}:request:${name}`"
-                :value="`${step.id}:request:${name}`"
-                :label="name"
-              />
-            </el-option-group>
-            <el-option-group :label="`第 ${index + 1} 步 · 出参 · ${step.name}`">
-              <el-option
-                v-for="port in (step.outputPorts || [{ key: 'result', fromPath: '' }])"
-                :key="`${step.id}:port:${port.key}`"
-                :value="portSourceValue(step.id, port)"
-                :label="portOptionLabel(port)"
-              />
-            </el-option-group>
-            <el-option-group
-              v-if="step.responseFields?.length"
-              :label="`第 ${index + 1} 步 · 响应字段 · ${step.name}`"
-            >
-              <el-option
-                :value="`${step.id}:output:*`"
-                label="完整结果"
-              />
-              <el-option
-                v-for="name in step.responseFields"
-                :key="`${step.id}:output:${name}`"
-                :value="`${step.id}:output:${name}`"
-                :label="responseFieldLabel(name)"
-              />
-            </el-option-group>
-          </template>
-        </el-select>
-        <p class="data-hint">{{ dataHint }}</p>
-        <p v-if="mode === 'data' && !upstreamSources.some((s) => s.responseFields?.length) && upstreamSources.length" class="data-hint muted">
-          前序暂无响应字段：可选手输 $.path，或先试跑，字段会自动出现（保存后仍保留）
-        </p>
+          <span class="step-no">第 {{ index + 1 }} 步</span>
+          <span class="step-name">{{ step.name }}</span>
+        </button>
+      </div>
+      <div v-if="activeStep" class="result-picks">
+        <button
+          v-for="opt in activeOptions"
+          :key="`${opt.fromSource}:${opt.fromField}`"
+          type="button"
+          class="result-chip"
+          :class="{ active: isOptionActive(opt) }"
+          @click="pickOption(activeStep, opt)"
+        >
+          {{ opt.label }}
+        </button>
+        <button type="button" class="text-btn" @click="showFilled = !showFilled">
+          {{ showFilled ? '收起已填内容' : '用这一步里已经填过的内容' }}
+        </button>
+        <div v-if="showFilled" class="result-picks nested">
+          <button
+            v-for="opt in activeFilled"
+            :key="`req:${opt.fromField}`"
+            type="button"
+            class="result-chip"
+            :class="{ active: isOptionActive(opt) }"
+            @click="pickOption(activeStep, opt)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+        <button type="button" class="text-btn" @click="showPath = !showPath">
+          {{ showPath ? '收起' : '按具体项目名取值' }}
+        </button>
+        <el-input
+          v-if="showPath"
+          :model-value="pathDraft"
+          placeholder="例如第一行的姓名：rows[0].name"
+          @change="onPathCommit"
+        />
       </div>
     </div>
+
+    <p class="sentence">{{ sentence }}</p>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Check } from '@element-plus/icons-vue'
-import { fieldLabel, isFieldConfigured } from '@/utils/workflowBinding'
+import {
+  bindingSummary,
+  fieldLabel,
+  filledOptionsForStep,
+  findUpstreamFieldMatch,
+  handoffOptionsForStep,
+  isFieldConfigured,
+  suggestHandoff,
+} from '@/utils/workflowBinding'
 
 const props = defineProps({
   field: { type: Object, required: true },
@@ -147,9 +175,13 @@ const props = defineProps({
 
 const emit = defineEmits(['change', 'remove'])
 
-const mode = computed(() => {
-  const m = props.binding.mode || 'fixed'
-  if (m === 'runtime' || m === 'upstream') return 'data'
+const showFilled = ref(false)
+const showPath = ref(false)
+
+const choice = computed(() => {
+  const mode = props.binding.mode || 'fixed'
+  if (mode === 'runtime') return 'caller'
+  if (mode === 'upstream') return 'previous'
   return 'fixed'
 })
 
@@ -158,41 +190,54 @@ const isDone = computed(() => {
   return isFieldConfigured(props.binding, props.field)
 })
 
-const sourceValue = computed(() => {
-  if (props.binding.mode === 'runtime') {
-    const key = props.binding.inputKey || props.field.key
-    return key ? `input:${key}` : ''
-  }
-  if (props.binding.mode === 'upstream' && props.binding.fromNode && props.binding.fromField) {
-    const side = props.binding.fromSource === 'request' ? 'request' : 'output'
-    const field = props.binding.fromField === '__whole__' ? '*' : props.binding.fromField
-    return `${props.binding.fromNode}:${side}:${field}`
-  }
-  return ''
+const suggestion = computed(() => suggestHandoff(props.field.key, props.upstreamSources))
+const suggestionApplied = computed(() => (
+  props.binding.mode === 'upstream'
+  && props.binding.fromNode === suggestion.value?.fromNode
+  && props.binding.fromField === suggestion.value?.fromField
+  && props.binding.fromSource !== 'request'
+))
+
+const otherInputs = computed(() =>
+  (props.inputFields || []).filter((item) => item.key && item.key !== props.field.key),
+)
+
+const callerValue = computed(() => props.binding.inputKey || props.field.key)
+
+const activeStepId = computed(() => {
+  if (props.binding.mode === 'upstream' && props.binding.fromNode) return props.binding.fromNode
+  const last = props.upstreamSources[props.upstreamSources.length - 1]
+  return last?.id || ''
 })
 
-const dataHint = computed(() => {
-  if (props.binding.mode === 'runtime') {
-    const key = props.binding.inputKey || props.field.key
-    if (key && key !== props.field.key) {
-      return `来自工作流入参 ${key} → 本步 ${props.field.key}`
-    }
-    return `来自工作流入参 ${key || props.field.key}（调用时填写）`
-  }
-  if (props.binding.mode === 'upstream') {
-    const index = props.upstreamSources.findIndex((item) => item.id === props.binding.fromNode)
-    const step = index >= 0 ? props.upstreamSources[index] : null
-    const stepLabel = index >= 0
-      ? `第 ${index + 1} 步 · ${step?.name || ''}`
-      : (step?.name || '前序步骤')
-    const side = props.binding.fromSource === 'request' ? '请求' : '响应'
-    const field = props.binding.fromField === '__whole__' || props.binding.fromField === '*'
-      ? '完整'
-      : (props.binding.fromField || '')
-    return `来自${stepLabel} · ${side} · ${field}`
-  }
-  return '可选：工作流入参、前序任一步的请求或响应'
+const activeStep = computed(() =>
+  props.upstreamSources.find((item) => item.id === activeStepId.value) || null,
+)
+
+const activeOptions = computed(() => handoffOptionsForStep(activeStep.value))
+const activeFilled = computed(() => filledOptionsForStep(activeStep.value))
+
+const pathDraft = computed(() => {
+  if (props.binding.mode !== 'upstream' || props.binding.fromSource === 'request') return ''
+  const field = props.binding.fromField
+  if (!field || field === '__whole__' || field === '*') return ''
+  const known = activeOptions.value.some((item) => item.fromField === field)
+  return known ? '' : field
 })
+
+const sentence = computed(() => bindingSummary(props.binding, props.field, {
+  nodeNames: Object.fromEntries((props.upstreamSources || []).map((step) => [step.id, step.name])),
+  nodeIndexes: Object.fromEntries((props.upstreamSources || []).map((step, index) => [step.id, index + 1])),
+  inputLabels: Object.fromEntries((props.inputFields || []).map((item) => [item.key, item.description || item.key])),
+}))
+
+watch(() => props.binding.fromSource, (value) => {
+  if (value === 'request') showFilled.value = true
+}, { immediate: true })
+
+watch(pathDraft, (value) => {
+  if (value) showPath.value = true
+}, { immediate: true })
 
 function inputOptionLabel(item) {
   if (item.description && item.description !== item.key) {
@@ -201,143 +246,118 @@ function inputOptionLabel(item) {
   return item.key
 }
 
-function responseFieldLabel(name) {
-  const raw = String(name || '')
-  if (raw.startsWith('rows[0].')) return `首行 · ${raw.slice('rows[0].'.length)}`
-  if (raw === 'rows') return 'rows（行集）'
-  return raw
-}
-
-function portSourceValue(stepId, port) {
-  const path = String(port?.fromPath || '').replace(/^\$\.?/, '').trim()
-  if (!path || path === '*') return `${stepId}:output:*`
-  return `${stepId}:output:${path}`
-}
-
-function portOptionLabel(port) {
-  const path = String(port?.fromPath || '').replace(/^\$\.?/, '').trim()
-  if (!path) return `${port.key}（完整响应）`
-  return `${port.key} ← ${path}`
-}
-
 function emitChange(patch) {
   emit('change', { key: props.field.key, ...patch })
 }
 
-function onModeChange(nextMode) {
-  if (nextMode === 'fixed') {
-    emitChange({
-      mode: 'fixed',
-      value: props.binding.value ?? '',
-      fromNode: '',
-      fromField: '',
-      fromSource: '',
-      inputKey: '',
-    })
-    return
-  }
-  // 取数据：优先同名上游响应，再上游请求，再同名入参
-  const fieldKey = props.field.key
-  for (const step of props.upstreamSources || []) {
-    if (step.responseFields?.includes(fieldKey)) {
-      emitChange({
-        mode: 'upstream',
-        fromNode: step.id,
-        fromField: fieldKey,
-        fromSource: 'output',
-        inputKey: '',
-        value: '',
-      })
-      return
-    }
-  }
-  for (const step of props.upstreamSources || []) {
-    if (step.requestFields?.includes(fieldKey)) {
-      emitChange({
-        mode: 'upstream',
-        fromNode: step.id,
-        fromField: fieldKey,
-        fromSource: 'request',
-        inputKey: '',
-        value: '',
-      })
-      return
-    }
-  }
-  if (props.inputFields.length) {
-    const key = props.inputFields.find((item) => item.key === fieldKey)?.key
-      || props.inputFields[0].key
-    emitChange({
-      mode: 'runtime',
-      inputKey: key,
-      fromNode: '',
-      fromField: '',
-      fromSource: '',
-      value: '',
-    })
-    return
-  }
-  const step = props.upstreamSources[0]
-  if (step) {
-    const fromField = step.responseFields?.[0] || step.requestFields?.[0] || fieldKey
-    const fromSource = step.responseFields?.includes(fromField) ? 'output' : 'request'
-    emitChange({
-      mode: 'upstream',
-      fromNode: step.id,
-      fromField,
-      fromSource,
-      inputKey: '',
-      value: '',
-    })
-    return
-  }
-  emitChange({
-    mode: 'runtime',
-    inputKey: fieldKey,
+function clearLink() {
+  return {
     fromNode: '',
     fromField: '',
     fromSource: '',
+    inputKey: '',
+  }
+}
+
+function chooseFixed() {
+  emitChange({
+    mode: 'fixed',
+    value: props.binding.value ?? '',
+    ...clearLink(),
+  })
+}
+
+function chooseCaller() {
+  emitChange({
+    ...clearLink(),
+    mode: 'runtime',
+    inputKey: props.binding.inputKey || props.field.key,
     value: '',
   })
 }
 
-function onSourceChange(raw) {
-  let value = String(raw || '').trim()
-  if (!value) return
-  // allow-create: 用户直接输入入参键
-  if (!value.includes(':')) {
-    value = `input:${value}`
+function emitUpstream(step, fromField, fromSource) {
+  emitChange({
+    mode: 'upstream',
+    fromNode: step.id,
+    fromField: fromField || '__whole__',
+    fromSource: fromSource === 'request' ? 'request' : 'output',
+    inputKey: '',
+    value: '',
+  })
+}
+
+function choosePrevious() {
+  if (props.binding.mode === 'upstream' && props.binding.fromNode) return
+  if (suggestion.value) {
+    const step = props.upstreamSources.find((item) => item.id === suggestion.value.fromNode)
+    if (step) {
+      emitUpstream(step, suggestion.value.fromField, 'output')
+      return
+    }
   }
-  if (value.startsWith('input:')) {
-    const inputKey = value.slice('input:'.length)
-    emitChange({
-      mode: 'runtime',
-      inputKey,
-      fromNode: '',
-      fromField: '',
-      fromSource: '',
-      value: '',
-    })
+  const step = props.upstreamSources[props.upstreamSources.length - 1]
+  if (!step) {
+    chooseCaller()
     return
   }
-  const parts = value.split(':')
-  if (parts.length >= 3) {
-    const fromNode = parts[0]
-    const fromSource = parts[1] === 'request' ? 'request' : 'output'
-    let fromField = parts.slice(2).join(':')
-    if (fromField === '*' || fromField === '$') {
-      // 整步响应 → 引擎 fromPath 为空
-      fromField = '__whole__'
-    }
-    emitChange({
-      mode: 'upstream',
-      fromNode,
-      fromField,
-      fromSource,
-      inputKey: '',
-      value: '',
-    })
+  const matched = findUpstreamFieldMatch([step], props.field.key)
+  if (matched?.fromSource === 'output') {
+    emitUpstream(step, matched.field, 'output')
+    return
   }
+  emitUpstream(step, '__whole__', 'output')
+}
+
+function pickStep(step) {
+  const matched = findUpstreamFieldMatch([step], props.field.key)
+  if (matched?.fromSource === 'output') {
+    emitUpstream(step, matched.field, 'output')
+    return
+  }
+  const current = props.binding.fromField
+  const opts = handoffOptionsForStep(step)
+  if (props.binding.fromNode === step.id && opts.some((item) => item.fromField === current)) return
+  emitUpstream(step, '__whole__', 'output')
+}
+
+function pickOption(step, opt) {
+  emitUpstream(step, opt.fromField, opt.fromSource)
+}
+
+function isOptionActive(opt) {
+  if (props.binding.mode !== 'upstream') return false
+  if (props.binding.fromNode !== activeStepId.value) return false
+  const side = props.binding.fromSource === 'request' ? 'request' : 'output'
+  if (side !== opt.fromSource) return false
+  const field = props.binding.fromField === '*' ? '__whole__' : (props.binding.fromField || '__whole__')
+  return field === opt.fromField
+}
+
+function applySuggestion() {
+  const step = props.upstreamSources.find((item) => item.id === suggestion.value?.fromNode)
+  if (!step || !suggestion.value) return
+  emitUpstream(step, suggestion.value.fromField, 'output')
+}
+
+function onCallerChange(raw) {
+  const inputKey = String(raw || '').trim() || props.field.key
+  emitChange({
+    ...clearLink(),
+    mode: 'runtime',
+    inputKey,
+    value: '',
+  })
+}
+
+function onPathCommit(raw) {
+  const text = String(raw || '').trim().replace(/^\$\.?/, '')
+  if (!activeStep.value) return
+  if (!text || text === '*' || text === '$') {
+    emitUpstream(activeStep.value, '__whole__', 'output')
+    return
+  }
+  emitUpstream(activeStep.value, text, 'output')
 }
 </script>
 
@@ -385,46 +405,108 @@ function onSourceChange(raw) {
   border-color: var(--el-color-danger);
   color: var(--el-color-danger);
 }
-.mode-switch {
-  display: inline-flex;
-  gap: 0;
+.suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   margin-bottom: 8px;
-  padding: 2px;
+  padding: 8px 10px;
   border-radius: 8px;
-  background: var(--qz-fill);
-  border: 1px solid var(--qz-border);
+  background: var(--el-color-success-light-9);
+  color: var(--el-color-success-dark-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.suggest-btn {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: var(--el-color-success);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mode-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 .mode-chip {
-  border: 0;
-  background: transparent;
-  padding: 4px 12px;
+  border: 1px solid var(--qz-border);
+  background: var(--qz-fill);
+  padding: 6px 10px;
   font-size: 12px;
   line-height: 1.4;
-  border-radius: 6px;
+  border-radius: 999px;
   color: var(--qz-text-muted);
   cursor: pointer;
 }
 .mode-chip.active {
   background: var(--qz-card);
+  border-color: var(--el-color-primary-light-5);
   color: var(--el-color-primary);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+.mode-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .param-value { margin-top: 2px; }
-.data-box {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border-radius: var(--qz-radius);
-  background: var(--qz-fill);
-  border: 1px dashed var(--el-color-primary-light-7);
-}
-.data-hint {
-  margin: 0;
+.lead {
+  margin: 0 0 8px;
   font-size: 12px;
   color: #64748b;
   line-height: 1.5;
 }
-.data-hint.muted { opacity: 0.85; }
+.step-picks,
+.result-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.result-picks { margin-top: 8px; }
+.result-picks.nested { margin-top: 6px; }
+.step-pick,
+.result-chip,
+.text-btn {
+  border: 1px solid var(--qz-border);
+  background: var(--qz-card);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+.step-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 108px;
+  padding: 6px 10px;
+}
+.step-pick.active,
+.result-chip.active {
+  border-color: var(--el-color-primary);
+  background: var(--qz-primary-soft);
+  color: var(--el-color-primary);
+}
+.step-no { font-size: 11px; color: var(--qz-text-muted); }
+.step-pick.active .step-no { color: var(--el-color-primary); }
+.step-name { font-size: 13px; font-weight: 600; }
+.result-chip,
+.text-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.text-btn {
+  border-style: dashed;
+  color: var(--qz-text-muted);
+  background: transparent;
+}
+.sentence {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.5;
+}
 </style>
