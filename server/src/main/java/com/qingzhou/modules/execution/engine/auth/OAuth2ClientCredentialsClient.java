@@ -113,13 +113,20 @@ public class OAuth2ClientCredentialsClient {
                 expiresIn = Math.max(60, number.longValue());
             }
             long ttl = Math.max(30, expiresIn - 60);
-            redisOps.opsForValue().set(RedisKeys.oauth2Token(credential.getId()), accessToken, ttl, TimeUnit.SECONDS);
-            log.info("刷新 OAuth2 AccessToken 成功 credentialId={} ttl={}s", credential.getId(), ttl);
+            if (credential.getId() != null) {
+                redisOps.opsForValue().set(RedisKeys.oauth2Token(credential.getId()), accessToken, ttl, TimeUnit.SECONDS);
+                log.info("刷新 OAuth2 AccessToken 成功 credentialId={} ttl={}s", credential.getId(), ttl);
+            }
             return accessToken;
         } catch (BizException ex) {
             throw ex;
         } catch (Exception ex) {
             throw new BizException(ResultCode.THIRD_PARTY_ERROR, "OAuth2 换票失败: " + ex.getMessage());
         }
+    }
+
+    /** 未入库试连通：直接换票，不写缓存 */
+    public String probeAccessToken(Credential credential) {
+        return refresh(credential);
     }
 }

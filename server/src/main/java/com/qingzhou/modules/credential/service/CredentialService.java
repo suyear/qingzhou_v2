@@ -23,4 +23,7 @@ public interface CredentialService extends IService<Credential> {
     CredentialVO changeStatus(Long id, int status);
 
     CredentialTestVO test(Long id);
+
+    /** 按表单试连通，不落库（新建前校验） */
+    CredentialTestVO testProbe(CredentialSaveRequest request);
 }

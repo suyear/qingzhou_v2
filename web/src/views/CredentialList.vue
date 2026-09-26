@@ -374,8 +374,27 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
+        <div class="dialog-footer">
+          <div class="probe-status">
+            <template v-if="!form.id">
+              <span v-if="probePassed" class="probe-ok">已测通，可保存</span>
+              <span v-else-if="probeMessage" class="probe-fail">{{ probeMessage }}</span>
+              <span v-else class="probe-hint">请先测连通，通过后再加入</span>
+            </template>
+          </div>
+          <div class="dialog-actions">
+            <el-button @click="dialogVisible = false">取消</el-button>
+            <el-button :loading="probing" @click="onProbeForm">测连通</el-button>
+            <el-button
+              type="primary"
+              :loading="saving"
+              :disabled="!form.id && !probePassed"
+              @click="save"
+            >
+              {{ form.id ? '保存' : '测通后加入' }}
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
@@ -395,7 +414,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import PageState from '@/components/PageState.vue'
@@ -433,6 +452,7 @@ import {
   disableCredential,
   enableCredential,
   pageCredentials,
+  probeCredential,
   testCredential,
   updateCredential,
 } from '@/api/credential'
@@ -492,8 +512,18 @@ const dialogVisible = ref(false)
 const drawerVisible = ref(false)
 const drawerRow = ref(null)
 const saving = ref(false)
+const probing = ref(false)
+const probePassed = ref(false)
+const probeMessage = ref('')
 const advancedAuthOpen = ref([])
 const form = reactive(createEmptyCredentialForm())
+
+watch(form, () => {
+  if (probePassed.value || probeMessage.value) {
+    probePassed.value = false
+    probeMessage.value = ''
+  }
+}, { deep: true })
 
 const drawerMetaItems = computed(() => {
   const row = drawerRow.value
@@ -539,9 +569,9 @@ async function onRowCommand(cmd, row) {
 }
 
 const typeHint = computed(() => {
-  if (form.credentialType === 'WECOM') return '用于企业微信接口，保存后可测连通。'
-  if (form.credentialType === 'DATABASE') return '用于数据库脚本组件。密码加密存储，可测连通。'
-  return '用于 HTTP 接口。常用令牌/账号密码即可；OAuth2、证书等在下方「高级鉴权」。'
+  if (form.credentialType === 'WECOM') return '填写后先点「测连通」，通过后再加入。'
+  if (form.credentialType === 'DATABASE') return '填写连接信息后先测连通，通过后再加入。密码加密存储。'
+  return '填写鉴权信息后先测连通；OAuth2/证书会实际校验，其它类型校验配置完整性。'
 })
 
 const emptyText = computed(() => (
@@ -588,6 +618,8 @@ async function loadWorkflows() {
 
 function resetForm() {
   Object.assign(form, createEmptyCredentialForm())
+  probePassed.value = false
+  probeMessage.value = ''
 }
 
 function openCreate() {
@@ -673,10 +705,70 @@ function validateForm() {
   return ''
 }
 
+async function onProbeForm() {
+  const message = validateForm()
+  if (message) {
+    ElMessage.warning(message)
+    return
+  }
+  probing.value = true
+  probePassed.value = false
+  probeMessage.value = ''
+  try {
+    const payload = buildCredentialPayload(form)
+    let res
+    if (form.id && !hasSecretInput()) {
+      res = await testCredential(form.id)
+    } else {
+      res = await probeCredential(payload)
+    }
+    const data = res.data || { success: false, message: '连通失败' }
+    testResult.value = data
+    testVisible.value = true
+    if (data.success) {
+      probePassed.value = true
+      probeMessage.value = ''
+      ElMessage.success(data.message || '连通成功')
+    } else {
+      probePassed.value = false
+      probeMessage.value = data.message || '连通失败'
+      ElMessage.warning(probeMessage.value)
+    }
+  } catch (error) {
+    probePassed.value = false
+    probeMessage.value = networkErrorMessage(error)
+    ElMessage.error(probeMessage.value)
+  } finally {
+    probing.value = false
+  }
+}
+
+/** 编辑时是否填写了新密钥；有则走 probe，否则走已入库 test */
+function hasSecretInput() {
+  if (form.credentialType === 'WECOM' || form.credentialType === 'DATABASE') {
+    return Boolean(form.secret)
+  }
+  if (form.credentialType !== 'HTTP_AUTH') return false
+  const t = form.authType
+  if (['basic', 'digest'].includes(t)) return Boolean(form.password)
+  if (t === 'bearer' || (t === 'jwt' && form.jwtMode !== 'sign')) return Boolean(form.secret)
+  if (t === 'jwt' && form.jwtMode === 'sign') return Boolean(form.jwtSecret)
+  if (t === 'apiKey') return Boolean(form.apiKeyValue)
+  if (t === 'cookie') return Boolean(form.cookie)
+  if (t === 'oauth2_cc') return Boolean(form.clientSecret)
+  if (t === 'aksk') return Boolean(form.secretKey)
+  if (t === 'mtls') return Boolean(form.clientCert || form.privateKey)
+  return false
+}
+
 async function save() {
   const message = validateForm()
   if (message) {
     ElMessage.warning(message)
+    return
+  }
+  if (!form.id && !probePassed.value) {
+    ElMessage.warning('请先测连通，通过后再加入')
     return
   }
   saving.value = true
@@ -687,7 +779,7 @@ async function save() {
     } else {
       await createCredential(payload)
     }
-    ElMessage.success('已保存')
+    ElMessage.success(form.id ? '已保存' : '已加入')
     dialogVisible.value = false
     await load()
   } finally {
@@ -749,6 +841,27 @@ onMounted(async () => {
   color: var(--qz-text-muted);
   line-height: 1.45;
 }
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.probe-status {
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  min-height: 20px;
+}
+.probe-hint { color: var(--qz-text-muted); }
+.probe-ok { color: var(--el-color-success); }
+.probe-fail { color: var(--el-color-danger); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .drawer-stack { display: flex; flex-direction: column; gap: 12px; }
 .drawer-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }

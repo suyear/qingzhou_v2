@@ -61,6 +61,11 @@ public class CredentialController {
         return R.ok(credentialService.changeStatus(id, 0));
     }
 
+    @PostMapping("/probe")
+    public R<CredentialTestVO> probe(@Valid @RequestBody CredentialSaveRequest request) {
+        return R.ok(credentialService.testProbe(request));
+    }
+
     @PostMapping("/{id}/test")
     public R<CredentialTestVO> test(@PathVariable Long id) {
         return R.ok(credentialService.test(id));

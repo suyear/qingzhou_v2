@@ -10,6 +10,8 @@ import com.qingzhou.common.crypto.AesEncryptor;
 import com.qingzhou.common.exception.BizException;
 import com.qingzhou.common.json.Jsons;
 import com.qingzhou.infra.wecom.TokenManager;
+import com.qingzhou.infra.wecom.WecomTokenClient;
+import com.qingzhou.infra.wecom.WecomTokenResponse;
 import com.qingzhou.modules.audit.service.AuditLogService;
 import com.qingzhou.modules.credential.dto.CredentialSaveRequest;
 import com.qingzhou.modules.credential.dto.CredentialTestVO;
@@ -31,9 +33,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 
 @Service
 @RequiredArgsConstructor
@@ -56,6 +62,7 @@ public class CredentialServiceImpl extends ServiceImpl<CredentialMapper, Credent
     private final ObjectProvider<DatasourcePoolManager> datasourcePoolManager;
     private final ObjectProvider<OAuth2ClientCredentialsClient> oauth2Client;
     private final ObjectProvider<MtlsHttpClientFactory> mtlsFactory;
+    private final WecomTokenClient wecomTokenClient;
 
     @Override
     public IPage<CredentialVO> pageVo(PageQuery query) {
@@ -124,25 +131,47 @@ public class CredentialServiceImpl extends ServiceImpl<CredentialMapper, Credent
 
     @Override
     public CredentialTestVO test(Long id) {
-        Credential entity = require(id);
+        return testEntity(require(id), false);
+    }
+
+    @Override
+    public CredentialTestVO testProbe(CredentialSaveRequest request) {
+        Credential draft = new Credential();
+        fill(draft, request, true);
+        draft.setStatus(1);
+        return testEntity(draft, true);
+    }
+
+    private CredentialTestVO testEntity(Credential entity, boolean probe) {
         if (JdbcCredentialSupport.isDatabase(entity)) {
-            return testDatabase(entity);
+            return probe ? testDatabaseProbe(entity) : testDatabase(entity);
         }
         if (HttpAuthCredentialSupport.isHttpAuth(entity)) {
-            return testHttpAuth(entity);
+            return testHttpAuth(entity, probe);
         }
         try {
-            tokenManager.getObject().getAccessToken(id);
+            if (probe) {
+                String secret = aesEncryptor.decrypt(entity.getSecretCipher());
+                WecomTokenResponse response = wecomTokenClient.fetch(entity.getCorpId(), secret);
+                if (!response.success() || !org.springframework.util.StringUtils.hasText(response.accessToken())) {
+                    return new CredentialTestVO(false,
+                            "企业微信 gettoken 失败: errcode=" + response.errcode() + ", errmsg=" + response.errmsg());
+                }
+                return new CredentialTestVO(true, "已拿到 AccessToken，凭证可用");
+            }
+            tokenManager.getObject().getAccessToken(entity.getId());
             return new CredentialTestVO(true, "已拿到 AccessToken，凭证可用");
         } catch (BizException ex) {
             return new CredentialTestVO(false, ex.getMessage());
+        } catch (Exception ex) {
+            return new CredentialTestVO(false, ex.getMessage() == null ? "连通失败" : ex.getMessage());
         }
     }
 
     private CredentialTestVO testDatabase(Credential entity) {
         DatasourcePoolManager pool = datasourcePoolManager.getIfAvailable();
         if (pool == null) {
-            return new CredentialTestVO(false, "数据源连接池未就绪");
+            return testDatabaseProbe(entity);
         }
         try (var connection = pool.getConnection(entity.getId());
              var statement = connection.createStatement()) {
@@ -158,7 +187,36 @@ public class CredentialServiceImpl extends ServiceImpl<CredentialMapper, Credent
         }
     }
 
+    private CredentialTestVO testDatabaseProbe(Credential entity) {
+        try {
+            JdbcCredentialSupport.JdbcEndpoint endpoint = JdbcCredentialSupport.from(entity);
+            JdbcCredentialSupport.validate(endpoint.dbType(), endpoint.host(), endpoint.port(),
+                    endpoint.dbName(), endpoint.username());
+            String password = aesEncryptor.decrypt(entity.getSecretCipher());
+            Class.forName(JdbcCredentialSupport.driverClassName(endpoint.dbType()));
+            Properties props = new Properties();
+            props.setProperty("user", endpoint.username());
+            props.setProperty("password", password == null ? "" : password);
+            props.setProperty("loginTimeout", "5");
+            try (Connection connection = DriverManager.getConnection(JdbcCredentialSupport.jdbcUrl(endpoint), props);
+                 Statement statement = connection.createStatement()) {
+                statement.setQueryTimeout(5);
+                statement.execute(JdbcCredentialSupport.validationQuery(endpoint.dbType()));
+            }
+            return new CredentialTestVO(true, "已连通 " + JdbcCredentialSupport.displayUrl(endpoint));
+        } catch (BizException ex) {
+            return new CredentialTestVO(false, ex.getMessage());
+        } catch (Exception ex) {
+            String message = ex.getMessage() == null ? "数据库连接失败" : ex.getMessage();
+            return new CredentialTestVO(false, message);
+        }
+    }
+
     private CredentialTestVO testHttpAuth(Credential entity) {
+        return testHttpAuth(entity, false);
+    }
+
+    private CredentialTestVO testHttpAuth(Credential entity, boolean probe) {
         String authType = HttpAuthCredentialSupport.resolveAuthType(entity);
         Map<String, Object> extra = HttpAuthCredentialSupport.readExtra(entity);
         Map<String, String> secrets = HttpAuthCredentialSupport.decryptSecrets(entity, aesEncryptor);
@@ -169,7 +227,9 @@ public class CredentialServiceImpl extends ServiceImpl<CredentialMapper, Credent
         }
         if (HttpAuthCredentialSupport.AUTH_OAUTH2_CC.equals(authType)) {
             try {
-                String token = oauth2Client.getObject().getAccessToken(entity.getId());
+                String token = probe || entity.getId() == null
+                        ? oauth2Client.getObject().probeAccessToken(entity)
+                        : oauth2Client.getObject().getAccessToken(entity.getId());
                 return new CredentialTestVO(true, "已拿到 OAuth2 AccessToken（长度 " + token.length() + "）");
             } catch (BizException ex) {
                 return new CredentialTestVO(false, ex.getMessage());

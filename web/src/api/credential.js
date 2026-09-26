@@ -27,3 +27,8 @@ export function disableCredential(id) {
 export function testCredential(id) {
   return http.post(`/api/credentials/${id}/test`, null, { timeout: 30000 })
 }
+
+/** 新建前按表单试连通，不落库 */
+export function probeCredential(payload) {
+  return http.post('/api/credentials/probe', payload, { timeout: 30000 })
+}
