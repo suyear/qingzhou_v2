@@ -124,17 +124,25 @@ import { computed, ref } from 'vue'
 import DetailCodeBlock from '@/components/detail/DetailCodeBlock.vue'
 import {
   OPENAPI_DEMO_INPUT,
+  demoOutputForSchema,
   openapiBodyCompact,
   openapiBodyPretty,
   openapiSuccessSampleText,
 } from '@/utils/openapiContract'
+
+const props = defineProps({
+  outputSchema: { type: Object, default: null },
+})
 
 const sampleTab = ref('curl')
 const samplePath = ref('workflow')
 
 const bodyCompact = openapiBodyCompact()
 const bodyPretty = openapiBodyPretty()
-const successSampleText = computed(() => openapiSuccessSampleText(samplePath.value))
+const successSampleText = computed(() => openapiSuccessSampleText(
+  samplePath.value,
+  samplePath.value === 'workflow' ? demoOutputForSchema(props.outputSchema) : undefined,
+))
 
 const componentPath = 'POST {baseUrl}/openapi/v1/components/{componentCode}/execute'
 const workflowPath = 'POST {baseUrl}/openapi/v1/workflows/{workflowCode}/execute'

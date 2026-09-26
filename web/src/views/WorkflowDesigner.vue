@@ -55,6 +55,9 @@
         :all-step-sources="allStepSources"
         :input-fields="inputFields"
         :output-schema="outputSchema"
+        :step-inputs="selectedStepInputs"
+        :step-outputs="selectedStepOutputs"
+        :merge-preview="mergePreviewShape"
         :workflow-status="form.status"
         :workflow-dirty="dirty"
         :last-step-name="lastStepSourceName"
@@ -74,6 +77,9 @@
         @update-bindings="onBindingsChange"
         @update-input-fields="onInputFieldsUpdate"
         @update-output-schema="onOutputSchemaUpdate"
+        @update-step-inputs="onStepInputsUpdate"
+        @update-step-outputs="onStepOutputsUpdate"
+        @update-step-outputs-by-node="onStepOutputsUpdateByNode"
         @add-custom-field="onAddCustomField"
         @remove-custom-field="onRemoveCustomField"
         @try-run="tryRun"
@@ -241,23 +247,31 @@ import { networkErrorMessage } from '@/api/http'
 import { fieldsToSchema, schemaFields, schemaToFields, toNodeData, urlPath } from '@/utils/schema'
 import {
   applyBindingsToNodeData,
+  attachLearnedSchemas,
   bindingsToInputFields,
   bindingsToMappings,
   buildFieldMetaMap,
   collectUpstreamDeps,
   defaultBinding,
+  extractLearnedSchemas,
   inferBindingsForNode,
   isNodeConfigured,
   mergeInputFields,
   mergeNodeFields,
   normalizeOutputSchema,
+  normalizeStepInputs,
+  normalizeStepOutputs,
   outputSchemaHint,
   parseBindingValue,
+  previewMergeOutputShape,
   renameInputKeyInBindings,
+  resolveStepInputs,
+  resolveStepOutputs,
   responseFieldOptions,
   rowColumnPathsFromPayload,
   stepConfigSummary,
   topLevelKeysFromPayload,
+  unionStepInputs,
 } from '@/utils/workflowBinding'
 import WorkflowStepEditor from '@/components/designer/WorkflowStepEditor.vue'
 import { NODE_SHAPE, registerComponentNode } from '@/components/designer/registerNodes'
@@ -285,7 +299,7 @@ const components = ref([])
 const credentials = ref([])
 const paramMappings = ref([])
 const inputFields = ref([])
-const outputSchema = ref({ mode: 'last', fields: [] })
+const outputSchema = ref({ mode: 'merge', fields: [], reshapeFrom: 'merge' })
 const learnedResponseFields = ref({})
 const nodeBindings = ref({})
 const tryRunInput = ref('{}')
@@ -321,6 +335,20 @@ const selectedFields = computed(() => {
   const node = graph.getCellById(selectedId.value)
   if (!node || !node.isNode?.()) return []
   return fieldsForNode(node)
+})
+const selectedStepInputs = computed(() => {
+  nodeTick.value
+  if (!selectedId.value || !graph) return []
+  const node = graph.getCellById(selectedId.value)
+  if (!node?.isNode?.()) return []
+  return resolveStepInputs(node.getData() || {}, schemaFields(findComponent(node.getData() || {})))
+})
+const selectedStepOutputs = computed(() => {
+  nodeTick.value
+  if (!selectedId.value || !graph) return []
+  const node = graph.getCellById(selectedId.value)
+  if (!node?.isNode?.()) return []
+  return resolveStepOutputs(node.getData() || {})
 })
 const componentOptions = computed(() =>
   components.value.map((item) => ({
@@ -368,6 +396,7 @@ const allStepSources = computed(() => {
   if (!graph) return []
   return getOrderedNodes().map((node) => buildStepSource(node))
 })
+const mergePreviewShape = computed(() => previewMergeOutputShape(allStepSources.value))
 const upstreamSourcesForSelected = computed(() => {
   nodeTick.value
   if (!graph || !selectedId.value) return []
@@ -632,26 +661,77 @@ function findComponent(data) {
 
 function fieldsForNode(node) {
   const data = node.getData() || {}
-  return mergeNodeFields(schemaFields(findComponent(data)), data)
+  return resolveStepInputs(data, schemaFields(findComponent(data))).map((item) => ({
+    ...item,
+    custom: Boolean(data.customFields?.some((row) => row.key === item.key)),
+  }))
 }
 
 function buildStepSource(node) {
   const data = node.getData() || {}
-  const requestFields = fieldsForNode(node).map((item) => item.key)
+  const stepInputs = resolveStepInputs(data, schemaFields(findComponent(data)))
+  const requestFields = stepInputs.map((item) => item.key)
   for (const binding of nodeBindings.value[node.id] || []) {
     if (binding?.key && !requestFields.includes(binding.key)) {
       requestFields.push(binding.key)
     }
   }
-  const schemaFields = responseFieldOptions(findComponent(data))
+  const schemaFieldsList = responseFieldOptions(findComponent(data))
   const learned = learnedResponseFields.value[node.id] || []
-  const responseFields = [...new Set([...schemaFields, ...learned])]
+  const responseFields = [...new Set([...schemaFieldsList, ...learned])]
+  const outputPorts = resolveStepOutputs(data)
   return {
     id: node.id,
     name: data.componentName || node.id,
     requestFields,
     responseFields,
-    hasResponseSchema: schemaFields.length > 0,
+    outputPorts,
+    hasResponseSchema: schemaFieldsList.length > 0,
+  }
+}
+
+function syncWorkflowInputUnion() {
+  if (!graph) return
+  const steps = getOrderedNodes().map((node) => {
+    const data = node.getData() || {}
+    return resolveStepInputs(data, schemaFields(findComponent(data)))
+  })
+  const fromSteps = unionStepInputs(steps, [])
+  const overlay = Object.fromEntries(
+    (inputFields.value || []).map((item) => [item.key, item]),
+  )
+  inputFields.value = fromSteps.map((item) => {
+    const prev = overlay[item.key]
+    if (!prev) return item
+    return {
+      ...item,
+      description: prev.description || item.description,
+      required: prev.required ?? item.required,
+      type: prev.type || item.type,
+    }
+  })
+}
+
+function ensureNodeStepIo(node) {
+  if (!node?.isNode?.()) return
+  const data = { ...(node.getData() || {}) }
+  let changed = false
+  const derivedInputs = resolveStepInputs(data, schemaFields(findComponent(data)))
+  if (!Array.isArray(data.stepInputs) || !data.stepInputs.length) {
+    data.stepInputs = normalizeStepInputs(derivedInputs)
+    changed = true
+  }
+  if (!Array.isArray(data.stepOutputs) || !data.stepOutputs.length) {
+    data.stepOutputs = normalizeStepOutputs(null)
+    changed = true
+  }
+  if (changed) {
+    // 浅合并写入数组，避免 deep merge 残留
+    patchNodeData(node, {
+      stepInputs: data.stepInputs,
+      stepOutputs: data.stepOutputs,
+    })
+    nodeTick.value += 1
   }
 }
 
@@ -759,6 +839,7 @@ function addToChain(item, options = {}) {
     y: 100,
     data: toNodeData(item),
   })
+  ensureNodeStepIo(node)
   const reordered = [...before]
   reordered.splice(insertAt, 0, node)
   reordered.forEach((cell, idx) => {
@@ -803,11 +884,17 @@ async function removeStep(nodeId) {
   const nextBindings = { ...nodeBindings.value }
   delete nextBindings[nodeId]
   nodeBindings.value = nextBindings
+  if (learnedResponseFields.value[nodeId]) {
+    const nextLearned = { ...learnedResponseFields.value }
+    delete nextLearned[nodeId]
+    learnedResponseFields.value = nextLearned
+  }
   let broken = 0
   for (const n of getOrderedNodes()) {
     broken += sanitizeUpstreamBindings(n.id)
   }
   relayoutChain()
+  syncWorkflowInputUnion()
   const remaining = getOrderedNodes()
   if (selectedId.value === nodeId) {
     const neighbor = remaining[Math.min(Math.max(index, 0), Math.max(remaining.length - 1, 0))]
@@ -888,33 +975,112 @@ function onBindingsChange(bindings) {
     [selectedId.value]: bindings,
   }
   applyBindingsToSelectedNode()
-  // 外部传入新键并入入参面板
-  const metaMap = buildFieldMetaMap(nodeBindings.value, {
-    [selectedId.value]: fieldsForNode(graph.getCellById(selectedId.value)),
-  })
-  inputFields.value = mergeInputFields(inputFields.value, bindingsToInputFields(nodeBindings.value, metaMap))
+  syncWorkflowInputUnion()
   markDirty()
   nodeTick.value += 1
 }
 
 function onInputFieldsUpdate(next, meta = {}) {
-  inputFields.value = next || []
+  // 工作流入参为各步并集预览：只允许改 description/required，不允许删仍被步骤引用的键
+  const union = collectStepInputUnion()
+  const nextMap = new Map((next || []).map((item) => [item.key, item]))
+  const merged = union.map((item) => {
+    const overlay = nextMap.get(item.key)
+    if (!overlay) return item
+    return {
+      ...item,
+      description: overlay.description ?? item.description,
+      required: overlay.required ?? item.required,
+      type: overlay.type || item.type,
+    }
+  })
+  inputFields.value = merged
   if (meta.renameFrom && meta.renameTo) {
     nodeBindings.value = renameInputKeyInBindings(nodeBindings.value, meta.renameFrom, meta.renameTo)
   }
-  if (meta.removedKey) {
-    const removedKey = meta.removedKey
-    const patched = {}
-    for (const [nodeId, list] of Object.entries(nodeBindings.value)) {
-      patched[nodeId] = (list || []).map((item) => {
-        if (item.mode === 'runtime' && (item.inputKey || item.key) === removedKey) {
-          return { ...item, mode: 'fixed', value: '', inputKey: '' }
-        }
-        return item
+  markDirty()
+  nodeTick.value += 1
+}
+
+function collectStepInputUnion() {
+  if (!graph) return []
+  const steps = getOrderedNodes().map((node) => {
+    const data = node.getData() || {}
+    return resolveStepInputs(data, schemaFields(findComponent(data)))
+  })
+  return unionStepInputs(steps, [])
+}
+
+/** X6 setData 默认 deep merge，数组/删键不会真正替换；浅合并或 overwrite */
+function patchNodeData(node, patch) {
+  node.setData(patch, { deep: false })
+}
+
+function replaceNodeData(node, data) {
+  node.setData(data, { overwrite: true })
+}
+
+function onStepInputsUpdate(next) {
+  if (!selectedId.value || !graph) return
+  const node = graph.getCellById(selectedId.value)
+  if (!node) return
+  const cleaned = normalizeStepInputs(next)
+  const prevData = node.getData() || {}
+  // 同步 customFields：保留仍在 stepInputs 中的自定义键
+  const inputKeys = new Set(cleaned.map((item) => item.key))
+  const customFields = (prevData.customFields || []).filter((item) => inputKeys.has(item.key))
+  for (const item of cleaned) {
+    const schemaKeys = new Set(schemaFields(findComponent(prevData)).map((f) => f.key))
+    if (!schemaKeys.has(item.key) && !customFields.some((c) => c.key === item.key)) {
+      customFields.push({
+        key: item.key,
+        type: item.type || 'string',
+        required: Boolean(item.required),
+        description: item.description || item.key,
       })
     }
-    nodeBindings.value = patched
   }
+  // 浅合并替换数组，避免 deep merge 残留已删入参
+  patchNodeData(node, { stepInputs: cleaned, customFields })
+  // 重建 bindings：保留已有配置
+  const prev = nodeBindings.value[selectedId.value] || []
+  const prevMap = Object.fromEntries(prev.map((item) => [item.key, item]))
+  const upstream = getUpstreamNodes(node.id).map((item) => {
+    const source = buildStepSource(item)
+    return {
+      id: item.id,
+      fields: [...new Set([...(source.responseFields || []), ...(source.requestFields || [])])],
+      responseFields: source.responseFields || [],
+      requestFields: source.requestFields || [],
+      outputPorts: source.outputPorts || [],
+    }
+  })
+  nodeBindings.value = {
+    ...nodeBindings.value,
+    [selectedId.value]: cleaned.map((field) => prevMap[field.key] || defaultBinding(field, upstream)),
+  }
+  applyBindingsToSelectedNode()
+  syncWorkflowInputUnion()
+  markDirty()
+  nodeTick.value += 1
+}
+
+function onStepOutputsUpdate(next) {
+  if (!selectedId.value || !graph) return
+  writeStepOutputs(selectedId.value, next)
+}
+
+function onStepOutputsUpdateByNode({ nodeId, outputs } = {}) {
+  if (!nodeId || !graph) return
+  writeStepOutputs(nodeId, outputs)
+}
+
+function writeStepOutputs(nodeId, next) {
+  const node = graph.getCellById(nodeId)
+  if (!node) return
+  // 浅合并替换 stepOutputs 数组：deep merge 会导致删不掉、改字段名后旧项残留
+  const cleaned = normalizeStepOutputs(next, { withDefault: true })
+  patchNodeData(node, { stepOutputs: cleaned })
   markDirty()
   nodeTick.value += 1
 }
@@ -937,6 +1103,19 @@ function onAddCustomField(field) {
     type: field.type || 'string',
   })
   data.customFields = custom
+  const stepInputs = resolveStepInputs(data, schemaFields(findComponent(data)))
+  if (!stepInputs.some((item) => item.key === field.key)) {
+    stepInputs.push({
+      key: field.key,
+      type: field.type || 'string',
+      required: Boolean(field.required),
+      description: field.description || field.key,
+    })
+  }
+  data.stepInputs = normalizeStepInputs(stepInputs)
+  if (!Array.isArray(data.stepOutputs) || !data.stepOutputs.length) {
+    data.stepOutputs = normalizeStepOutputs(null)
+  }
   node.setData(data)
   selectedData.value = data
   const upstream = getUpstreamNodes(node.id).map((item) => {
@@ -946,6 +1125,7 @@ function onAddCustomField(field) {
       fields: [...new Set([...(source.responseFields || []), ...(source.requestFields || [])])],
       responseFields: source.responseFields || [],
       requestFields: source.requestFields || [],
+      outputPorts: source.outputPorts || [],
     }
   })
   const bindings = [...(nodeBindings.value[selectedId.value] || [])]
@@ -954,14 +1134,7 @@ function onAddCustomField(field) {
     ...nodeBindings.value,
     [selectedId.value]: bindings,
   }
-  if (field.required || bindings[bindings.length - 1]?.mode === 'runtime') {
-    inputFields.value = mergeInputFields(inputFields.value, [{
-      key: field.key,
-      type: field.type || 'string',
-      required: Boolean(field.required),
-      description: field.description || '',
-    }])
-  }
+  syncWorkflowInputUnion()
   markDirty()
   nodeTick.value += 1
 }
@@ -972,13 +1145,18 @@ function onRemoveCustomField(key) {
   const data = { ...(node.getData() || {}) }
   data.customFields = (Array.isArray(data.customFields) ? data.customFields : [])
     .filter((item) => item.key !== key)
+  data.stepInputs = normalizeStepInputs(
+    resolveStepInputs(data, schemaFields(findComponent(data))).filter((item) => item.key !== key),
+  )
   delete data[key]
-  node.setData(data)
+  // overwrite：真正去掉 data[key]，否则 deep merge 会把已删参数值留在节点上
+  replaceNodeData(node, data)
   selectedData.value = data
   nodeBindings.value = {
     ...nodeBindings.value,
     [selectedId.value]: (nodeBindings.value[selectedId.value] || []).filter((item) => item.key !== key),
   }
+  syncWorkflowInputUnion()
   markDirty()
   nodeTick.value += 1
 }
@@ -1019,17 +1197,11 @@ function syncBindingsToPayload() {
   }
   const metaMap = buildFieldMetaMap(nodeBindings.value, fieldsByNode)
   paramMappings.value = bindingsToMappings(nodeBindings.value)
-  inputFields.value = mergeInputFields(inputFields.value, bindingsToInputFields(nodeBindings.value, metaMap))
+  syncWorkflowInputUnion()
 }
 
 function refreshInputFieldsFromBindings() {
-  if (!graph) return
-  const fieldsByNode = {}
-  for (const node of graph.getNodes()) {
-    fieldsByNode[node.id] = fieldsForNode(node)
-  }
-  const metaMap = buildFieldMetaMap(nodeBindings.value, fieldsByNode)
-  inputFields.value = mergeInputFields(inputFields.value, bindingsToInputFields(nodeBindings.value, metaMap))
+  syncWorkflowInputUnion()
 }
 
 function toBackendGraph() {
@@ -1124,9 +1296,17 @@ async function save() {
     return
   }
   syncBindingsToPayload()
+  syncWorkflowInputUnion()
   saving.value = true
   try {
-    const persistedOutput = normalizeOutputSchema(outputSchema.value, { forPersist: true })
+    const persistedOutput = attachLearnedSchemas(
+      normalizeOutputSchema(outputSchema.value, { forPersist: true, preferMerge: true }),
+      learnedResponseFields.value,
+    )
+    // 确保每个节点落库 stepInputs / stepOutputs
+    for (const node of getOrderedNodes()) {
+      ensureNodeStepIo(node)
+    }
     const payload = {
       workflowCode: form.workflowCode,
       workflowName: form.workflowName,
@@ -1149,8 +1329,9 @@ async function save() {
     lastSavedAt.value = formatTime(new Date())
     pauseDirty()
     applyMeta(res.data)
-    // 与落库一致：空 fields 收成 last 后回写本地
-    outputSchema.value = persistedOutput
+    // 与落库一致：空 fields 收成 last 后回写本地；learned 从 payload 还原
+    outputSchema.value = normalizeOutputSchema(persistedOutput)
+    learnedResponseFields.value = extractLearnedSchemas(persistedOutput)
     await resumeClean()
     if (!id && res.data?.id) {
       await router.replace(`/designer/${res.data.id}`)
@@ -1365,11 +1546,33 @@ async function bootstrap() {
       const wf = detail.data || {}
       applyMeta(wf)
       restoreGraph(wf.graph)
+      for (const node of getOrderedNodes()) {
+        ensureNodeStepIo(node)
+      }
       paramMappings.value = (wf.paramMapping || []).map((item) => ({ ...item }))
-      inputFields.value = schemaToFields(wf.inputSchema)
+      learnedResponseFields.value = extractLearnedSchemas(wf.outputSchema)
       outputSchema.value = normalizeOutputSchema(wf.outputSchema)
       initBindingsFromWorkflow(wf.paramMapping, wf.inputSchema)
-      refreshInputFieldsFromBindings()
+      // 1B：工作流入参 = 各步入参并集；面板只覆盖仍存在键的 description/required
+      const panel = schemaToFields(wf.inputSchema)
+      const fromSteps = unionStepInputs(
+        getOrderedNodes().map((node) => {
+          const data = node.getData() || {}
+          return resolveStepInputs(data, schemaFields(findComponent(data)))
+        }),
+        [],
+      )
+      const overlay = Object.fromEntries((panel || []).map((item) => [item.key, item]))
+      inputFields.value = fromSteps.map((item) => {
+        const prev = overlay[item.key]
+        if (!prev) return item
+        return {
+          ...item,
+          description: prev.description || item.description,
+          required: prev.required ?? item.required,
+          type: prev.type || item.type,
+        }
+      })
       nodeTick.value += 1
       const first = chainNodes.value[0]
       if (first) selectNode(first.id)

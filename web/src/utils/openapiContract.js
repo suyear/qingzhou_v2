@@ -1,7 +1,7 @@
 /**
  * 开放平台对外契约：文档 / curl / 试调共用同一份示例。
  * 字段须与真实网关 R<OpenApiExecuteResultVO> 一致（DB 业务键为 rows，不是 preview）。
- * 工作流若配置「查询首行」，data.output 则为单行对象而非整包。
+ * 工作流默认「按步骤合并」时，data.output 为 { 步骤名: { 端口: … } }。
  */
 export const OPENAPI_DEMO_INPUT = { userId: '1' }
 
@@ -20,6 +20,28 @@ export const OPENAPI_DEMO_OUTPUT_DB_FULL = {
   affectedRows: 0,
   rows: [OPENAPI_DEMO_OUTPUT],
   truncated: false,
+}
+
+/** 按步骤合并形态示例 */
+export const OPENAPI_DEMO_OUTPUT_MERGE = {
+  按照ID查询: {
+    result: OPENAPI_DEMO_OUTPUT_DB_FULL,
+  },
+}
+
+/** 根据工作流 outputSchema 选择文档示例 output */
+export function demoOutputForSchema(outputSchema) {
+  const mode = outputSchema?.mode || 'merge'
+  if (mode === 'firstRow') return OPENAPI_DEMO_OUTPUT
+  if (mode === 'last') return OPENAPI_DEMO_OUTPUT_DB_FULL
+  if (mode === 'fields' && Array.isArray(outputSchema?.fields) && outputSchema.fields.length) {
+    const shape = {}
+    for (const row of outputSchema.fields) {
+      if (row?.key) shape[row.key] = '…'
+    }
+    return shape
+  }
+  return OPENAPI_DEMO_OUTPUT_MERGE
 }
 
 export function openapiBodyCompact(input = OPENAPI_DEMO_INPUT) {

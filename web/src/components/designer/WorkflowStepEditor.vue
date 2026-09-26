@@ -103,7 +103,11 @@
                     </span>
                     <span class="timeline-sub">{{ item.method }} {{ item.path }}</span>
                     <span v-if="item.deps?.length" class="timeline-deps">
-                      <span v-for="dep in item.deps.slice(0, 2)" :key="dep.fromNode" class="dep-chip">
+                      <span
+                        v-for="dep in item.deps.slice(0, 3)"
+                        :key="`${dep.fromNode}:${dep.fromSource || 'output'}`"
+                        class="dep-chip"
+                      >
                         {{ dep.label }}
                       </span>
                     </span>
@@ -159,17 +163,17 @@
           </nav>
 
           <section v-show="leftTab === 'inputs'" class="inputs-panel">
-            <p class="quick-hint">试运行、定时调度、开放 API 共用这组入参。步骤里选「外部传入」时可绑定到这里的键（支持异名）。</p>
+            <p class="quick-hint">工作流入参 = 各步骤入参的全量并集（发布/试跑/开放 API 共用）。可在此改说明与必填；增删请在各步骤「本步入参」中操作。</p>
             <div v-if="!inputFields.length" class="inputs-empty">
               <p>还没有工作流入参</p>
-              <p class="inputs-empty-sub">可在此添加，或在步骤参数中选「外部传入」自动出现</p>
+              <p class="inputs-empty-sub">在步骤中添加入参后，会自动汇总到这里</p>
             </div>
             <div v-for="(row, index) in inputFields" :key="`${row.key}-${index}`" class="input-row">
               <el-input
                 :model-value="row.key"
-                placeholder="参数键，如 userId"
+                placeholder="参数键"
                 class="input-key"
-                @change="(val) => onInputKeyChange(index, val)"
+                disabled
               />
               <el-input
                 :model-value="row.description"
@@ -181,13 +185,11 @@
                 :model-value="row.required"
                 @change="(val) => patchInputField(index, { required: val })"
               >必填</el-checkbox>
-              <button type="button" class="op-btn danger" title="删除" @click="removeInputField(index)">×</button>
             </div>
-            <el-button type="primary" plain class="add-input-btn" @click="addInputField">+ 添加入参</el-button>
           </section>
 
           <section v-show="leftTab === 'outputs'" class="inputs-panel">
-            <p class="quick-hint">配置开放 API / 调度看到的结果。试运行主区会展示同一形态；节点明细仅供调试。</p>
+            <p class="quick-hint">默认按步骤名合并各步出参；也可用「JSON 整形」从合并结果投影字段。试运行与开放 API 形态一致。</p>
             <el-alert
               v-if="workflowStatus === 'PUBLISHED'"
               type="warning"
@@ -199,64 +201,179 @@
                 : `开放/调度使用已发布快照；试运行走当前草稿`"
             />
             <div class="output-mode">
-              <el-radio-group :model-value="outputSchema.mode || 'last'" @change="onOutputModeChange">
-                <el-radio-button value="last">完整结果</el-radio-button>
+              <el-radio-group :model-value="outputSchema.mode || 'merge'" @change="onOutputModeChange">
+                <el-radio-button value="merge">按步骤合并</el-radio-button>
+                <el-radio-button value="fields">JSON 整形</el-radio-button>
                 <el-radio-button value="firstRow">查询首行</el-radio-button>
-                <el-radio-button value="fields">字段投影</el-radio-button>
+                <el-radio-button value="last">末步完整</el-radio-button>
               </el-radio-group>
             </div>
-            <p v-if="(outputSchema.mode || 'last') === 'last'" class="inputs-empty-sub">
-              对外返回{{ lastStepName ? `第末步「${lastStepName}」` : '最后一步' }}的完整结果
-              （DB 查询为 rowCount / rows / truncated 整包）。
+            <p v-if="(outputSchema.mode || 'merge') === 'merge'" class="inputs-empty-sub">
+              对外返回对象，键为步骤名；下方可直接改各步<strong>字段名</strong>（即 API 里看到的 key）。
             </p>
+            <template v-if="(outputSchema.mode || 'merge') === 'merge'">
+              <div v-if="!allStepSources.length" class="inputs-empty">
+                <p>还没有步骤</p>
+                <p class="inputs-empty-sub">添加步骤并声明出参后，在此编排对外字段名</p>
+              </div>
+              <div
+                v-for="(step, si) in allStepSources"
+                :key="step.id"
+                class="merge-ports-block"
+              >
+                <button
+                  type="button"
+                  class="merge-step-head"
+                  @click="emit('select', step.id)"
+                >
+                  <span>第 {{ si + 1 }} 步 · {{ step.name }}</span>
+                  <span class="section-hint">{{ (step.outputPorts || []).length }} 个字段</span>
+                </button>
+                <div
+                  v-for="(port, pi) in (step.outputPorts || [])"
+                  :key="`${step.id}-${pi}-${port.key}`"
+                  class="input-row merge-port-row"
+                >
+                  <el-input
+                    :model-value="port.key"
+                    placeholder="字段名"
+                    class="sout-key"
+                    @change="(val) => commitPortKeyForStep(step.id, pi, val)"
+                  >
+                    <template #prefix>
+                      <span class="field-label-prefix">字段名</span>
+                    </template>
+                  </el-input>
+                  <el-select
+                    :model-value="stepOutputPathValue(port)"
+                    filterable
+                    allow-create
+                    default-first-option
+                    clearable
+                    placeholder="取值路径"
+                    class="sout-path"
+                    @change="(val) => patchPortForStep(step.id, pi, { fromPath: pathFromSelect(val) })"
+                    @clear="() => patchPortForStep(step.id, pi, { fromPath: '' })"
+                  >
+                    <el-option value="*" label="完整响应" />
+                    <el-option
+                      v-for="name in (step.responseFields || [])"
+                      :key="`${step.id}-rf-${name}`"
+                      :value="name"
+                      :label="fieldOptionLabel(name)"
+                    />
+                  </el-select>
+                  <el-input
+                    :model-value="port.description"
+                    placeholder="说明"
+                    class="sout-desc"
+                    @input="(val) => patchPortForStep(step.id, pi, { description: val })"
+                  />
+                  <button
+                    type="button"
+                    class="op-btn danger"
+                    title="删除字段"
+                    :disabled="(step.outputPorts || []).length <= 1"
+                    @click="removePortForStep(step.id, pi)"
+                  >×</button>
+                </div>
+                <div
+                  v-if="showAddMergeOutput === step.id"
+                  class="add-param-form merge-add-form"
+                >
+                  <el-input
+                    v-model="outputDraft.key"
+                    placeholder="字段名，如 user、username"
+                    @keyup.enter="confirmAddOutput"
+                  />
+                  <el-select
+                    v-model="outputDraft.fromPath"
+                    filterable
+                    allow-create
+                    default-first-option
+                    clearable
+                    placeholder="取值路径（空=完整响应）"
+                    style="width: 100%"
+                  >
+                    <el-option value="" label="完整响应" />
+                    <el-option
+                      v-for="name in (step.responseFields || [])"
+                      :key="`draft-${step.id}-${name}`"
+                      :value="name"
+                      :label="fieldOptionLabel(name)"
+                    />
+                  </el-select>
+                  <el-input v-model="outputDraft.description" placeholder="说明（选填）" />
+                  <div class="add-param-actions">
+                    <el-button type="primary" @click="confirmAddOutput">添加</el-button>
+                    <el-button @click="cancelAddOutput">取消</el-button>
+                  </div>
+                </div>
+                <el-button
+                  v-else
+                  type="primary"
+                  plain
+                  size="small"
+                  class="add-input-btn"
+                  @click="openAddOutput(step.id)"
+                >+ 添加字段</el-button>
+              </div>
+            </template>
             <p v-else-if="outputSchema.mode === 'firstRow'" class="inputs-empty-sub">
-              适合「按 ID 查单条」：从末步查询结果的 <code>rows[0]</code> 取出对象直接对外返回；
-              无行时为 null；若末步不是查询结果则与「完整结果」相同。
+              适合「按 ID 查单条」：从末步查询结果的 <code>rows[0]</code> 取出对象直接对外返回。
             </p>
-            <template v-else>
+            <p v-else-if="outputSchema.mode === 'last'" class="inputs-empty-sub">
+              对外返回{{ lastStepName ? `第末步「${lastStepName}」` : '最后一步' }}的完整结果。
+            </p>
+            <template v-else-if="outputSchema.mode === 'fields'">
+              <p class="inputs-empty-sub">从「按步骤合并」结果中投影字段；左侧填<strong>对外字段名</strong>。</p>
               <div v-if="!(outputSchema.fields || []).length" class="inputs-empty">
-                <p>还没有出参字段</p>
-                <p class="inputs-empty-sub warn">未配置时保存会按「最后一步」生效，不会静默变成多节点大包</p>
+                <p>还没有整形字段</p>
+                <p class="inputs-empty-sub warn">未配置时保存将回落为「按步骤合并」</p>
               </div>
               <div
                 v-for="(row, index) in (outputSchema.fields || [])"
                 :key="`out-${index}`"
-                class="input-row"
+                class="input-row merge-port-row"
               >
                 <el-input
                   :model-value="row.key"
                   placeholder="对外字段名"
-                  @change="(val) => patchOutputField(index, { key: val })"
-                />
+                  class="sout-key"
+                  @change="(val) => commitReshapeFieldKey(index, val)"
+                >
+                  <template #prefix>
+                    <span class="field-label-prefix">字段名</span>
+                  </template>
+                </el-input>
                 <el-select
-                  :model-value="outputSourceValue(row)"
+                  :model-value="reshapeSourceValue(row)"
                   filterable
                   allow-create
                   default-first-option
-                  placeholder="来源：整步或字段（可手输 $.rows[0].列名）"
-                  style="width: 100%"
-                  @change="(val) => onOutputSourceChange(index, val)"
+                  placeholder="来自合并结果：步骤.端口 或手输 $.路径"
+                  class="sout-path"
+                  @change="(val) => onReshapeSourceChange(index, val)"
                 >
-                  <el-option-group
-                    v-for="(step, si) in allStepSources"
-                    :key="step.id"
-                    :label="`第 ${si + 1} 步 · ${step.name}`"
-                  >
-                    <el-option
-                      :value="`${step.id}:*`"
-                      :label="`完整响应`"
-                    />
-                    <el-option
-                      v-for="name in step.responseFields"
-                      :key="`${step.id}:${name}`"
-                      :value="`${step.id}:${name}`"
-                      :label="fieldOptionLabel(name)"
-                    />
-                  </el-option-group>
+                  <template v-for="(step, si) in allStepSources" :key="step.id">
+                    <el-option-group :label="`第 ${si + 1} 步 · ${step.name}`">
+                      <el-option
+                        v-for="port in (step.outputPorts || [{ key: 'result', fromPath: '' }])"
+                        :key="`${step.name}:${port.key}`"
+                        :value="`merge:${step.name}:${port.key}`"
+                        :label="`${port.key}`"
+                      />
+                      <el-option
+                        :value="`merge:${step.name}:*`"
+                        label="整步出参对象"
+                      />
+                    </el-option-group>
+                  </template>
                 </el-select>
                 <el-input
                   :model-value="row.description"
                   placeholder="说明（选填）"
+                  class="sout-desc"
                   @input="(val) => patchOutputField(index, { description: val })"
                 />
                 <button type="button" class="op-btn danger" title="删除" @click="removeOutputField(index)">×</button>
@@ -266,8 +383,8 @@
                 plain
                 class="add-input-btn"
                 :disabled="!allStepSources.length"
-                @click="addOutputField"
-              >+ 添加出参字段</el-button>
+                @click="addReshapeField"
+              >+ 添加整形字段</el-button>
             </template>
 
             <div class="output-preview">
@@ -367,10 +484,10 @@
             :closable="false"
             show-icon
             class="upstream-alert"
-            title="本步可从前序步骤取数"
+            :title="refPoolTitle"
           >
             <div class="upstream-alert-body">
-              <span>有 {{ upstreamSources.length }} 个上游步骤。可一键按同名绑定，或在参数里选「取数据」。</span>
+              <span>{{ refPoolHint }}</span>
               <el-button size="small" type="primary" plain @click="emit('auto-bind-upstream')">按同名绑定上游</el-button>
             </div>
           </el-alert>
@@ -395,9 +512,12 @@
           </div>
 
           <div v-else class="config-fields">
+            <p v-if="selectedIndex > 0 || inputFields.length" class="ref-pool-summary" :title="refPoolDetail">
+              可引用：工作流入参 {{ inputFields.length }} · 前序请求 {{ upstreamRequestCount }} · 前序响应 {{ upstreamResponseCount }}
+            </p>
             <div v-if="requiredFields.length" class="field-section">
               <div class="section-head">
-                <span class="section-title">必填参数</span>
+                <span class="section-title">本步入参 · 必填</span>
                 <span class="section-hint">{{ requiredDone }}/{{ requiredFields.length }} 已完成</span>
               </div>
               <WorkflowParamField
@@ -414,7 +534,7 @@
 
             <div v-if="optionalFields.length" class="field-section">
               <button type="button" class="section-toggle" @click="showOptional = !showOptional">
-                <span class="section-title">可选参数</span>
+                <span class="section-title">本步入参 · 可选</span>
                 <span class="section-hint">{{ optionalFields.length }} 项 · {{ showOptional ? '收起' : '展开' }}</span>
               </button>
               <template v-if="showOptional">
@@ -432,7 +552,7 @@
             </div>
 
             <div class="add-param-block">
-              <el-button v-if="!showAddCustom" @click="showAddCustom = true">+ 添加参数</el-button>
+              <el-button v-if="!showAddCustom" @click="showAddCustom = true">+ 添加入参</el-button>
               <div v-else class="add-param-form">
                 <el-input v-model="customDraft.key" placeholder="参数键，如 deptId" />
                 <el-input v-model="customDraft.description" placeholder="说明（选填）" />
@@ -442,6 +562,101 @@
                   <el-button @click="cancelAddCustom">取消</el-button>
                 </div>
               </div>
+            </div>
+
+            <div class="field-section step-outputs-section">
+              <div class="section-head">
+                <span class="section-title">本步出参</span>
+                <span class="section-hint">字段名会出现在对外 API / 下一步取数中</span>
+              </div>
+              <div class="sout-col-head" aria-hidden="true">
+                <span>字段名</span>
+                <span>取值路径</span>
+                <span>说明</span>
+                <span></span>
+              </div>
+              <div
+                v-for="(row, index) in stepOutputs"
+                :key="`sout-${index}-${row.key}`"
+                class="input-row step-output-row"
+              >
+                <el-input
+                  :model-value="row.key"
+                  placeholder="如 user、username"
+                  class="sout-key"
+                  @change="(val) => commitStepOutputKey(index, val)"
+                />
+                <el-select
+                  :model-value="stepOutputPathValue(row)"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  placeholder="从本步响应取值（空=完整）"
+                  class="sout-path"
+                  @change="(val) => onStepOutputPathChange(index, val)"
+                  @clear="() => onStepOutputPathChange(index, '*')"
+                >
+                  <el-option value="*" label="完整响应" />
+                  <el-option
+                    v-for="name in selectedResponseFields"
+                    :key="name"
+                    :value="name"
+                    :label="fieldOptionLabel(name)"
+                  />
+                </el-select>
+                <el-input
+                  :model-value="row.description"
+                  placeholder="说明（选填）"
+                  class="sout-desc"
+                  @input="(val) => patchStepOutput(index, { description: val })"
+                />
+                <button
+                  type="button"
+                  class="op-btn danger"
+                  title="删除此出参"
+                  :disabled="stepOutputs.length <= 1"
+                  @click="removeStepOutput(index)"
+                >×</button>
+              </div>
+              <p v-if="stepOutputs.length <= 1" class="section-hint soft">至少保留一个出参字段；可直接改字段名与取值路径</p>
+              <div v-if="showAddOutput && !outputDraft.nodeId" class="add-param-form">
+                <el-input
+                  ref="outputDraftKeyRef"
+                  v-model="outputDraft.key"
+                  placeholder="字段名，如 user、username"
+                  @keyup.enter="confirmAddOutput"
+                />
+                <el-select
+                  v-model="outputDraft.fromPath"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  placeholder="取值路径（空=完整响应）"
+                  style="width: 100%"
+                >
+                  <el-option value="" label="完整响应" />
+                  <el-option
+                    v-for="name in selectedResponseFields"
+                    :key="`draft-sel-${name}`"
+                    :value="name"
+                    :label="fieldOptionLabel(name)"
+                  />
+                </el-select>
+                <el-input v-model="outputDraft.description" placeholder="说明（选填）" />
+                <div class="add-param-actions">
+                  <el-button type="primary" @click="confirmAddOutput">添加</el-button>
+                  <el-button @click="cancelAddOutput">取消</el-button>
+                </div>
+              </div>
+              <el-button
+                v-else
+                type="primary"
+                plain
+                class="add-input-btn"
+                @click="openAddOutput()"
+              >+ 添加出参字段</el-button>
             </div>
           </div>
 
@@ -490,7 +705,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import WorkflowParamField from './WorkflowParamField.vue'
-import { isFieldConfigured, isValidParamKey, isMetaKey } from '@/utils/workflowBinding'
+import { isFieldConfigured, isValidParamKey, isMetaKey, INPUT_SOURCE_NODE, MERGE_SOURCE_NODE, normalizeFromSource } from '@/utils/workflowBinding'
 import { CATEGORY_LABEL } from '@/utils/schema'
 
 const props = defineProps({
@@ -502,7 +717,10 @@ const props = defineProps({
   upstreamSources: { type: Array, default: () => [] },
   allStepSources: { type: Array, default: () => [] },
   inputFields: { type: Array, default: () => [] },
-  outputSchema: { type: Object, default: () => ({ mode: 'last', fields: [] }) },
+  outputSchema: { type: Object, default: () => ({ mode: 'merge', fields: [] }) },
+  stepInputs: { type: Array, default: () => [] },
+  stepOutputs: { type: Array, default: () => [] },
+  mergePreview: { type: Object, default: () => ({}) },
   workflowStatus: { type: String, default: '' },
   workflowDirty: { type: Boolean, default: false },
   lastStepName: { type: String, default: '' },
@@ -517,7 +735,9 @@ const props = defineProps({
 
 const emit = defineEmits([
   'select', 'remove', 'move', 'add', 'update-name', 'update-bindings',
-  'update-input-fields', 'update-output-schema', 'add-custom-field', 'remove-custom-field',
+  'update-input-fields', 'update-output-schema', 'update-step-inputs', 'update-step-outputs',
+  'update-step-outputs-by-node',
+  'add-custom-field', 'remove-custom-field',
   'try-run', 'publish', 'toggle-canvas', 'auto-bind-upstream',
 ])
 
@@ -528,8 +748,12 @@ const quickAddRef = ref(null)
 const leftScrollRef = ref(null)
 const showOptional = ref(false)
 const showAddCustom = ref(false)
+const showAddOutput = ref(false)
+const showAddMergeOutput = ref('') // nodeId when adding from 出参 Tab
 const pendingInsertAfterId = ref(null)
 const customDraft = reactive({ key: '', description: '', required: false })
+const outputDraft = reactive({ key: '', fromPath: '', description: '', nodeId: '' })
+const outputDraftKeyRef = ref(null)
 
 const selectedIndex = computed(() => {
   const idx = props.chainNodes.findIndex((item) => item.id === props.selectedId)
@@ -566,6 +790,32 @@ const nextStepLabel = computed(() => {
   if (selectedIndex.value >= props.chainNodes.length - 1) return '添加下一步'
   return '下一步 →'
 })
+const upstreamRequestCount = computed(() =>
+  props.upstreamSources.reduce((sum, step) => sum + (step.requestFields?.length || 0) + 1, 0),
+)
+const upstreamResponseCount = computed(() =>
+  props.upstreamSources.reduce((sum, step) => sum + (step.responseFields?.length || 0) + 1, 0),
+)
+const refPoolTitle = computed(() => {
+  if (!props.upstreamSources.length) return '可引用工作流入参'
+  return `可引用：入参 ${props.inputFields.length} · 前序 ${props.upstreamSources.length} 步`
+})
+const refPoolHint = computed(() => {
+  const names = props.upstreamSources.map((step, i) => `第${i + 1}步「${step.name}」`).join('、')
+  return `工作流入参、以及 ${names} 的请求与响应，均可在参数「取数据」中选用。`
+})
+const refPoolDetail = computed(() => {
+  const lines = []
+  if (props.inputFields.length) {
+    lines.push(`工作流入参：${props.inputFields.map((item) => item.key).join(', ')}`)
+  }
+  props.upstreamSources.forEach((step, i) => {
+    const req = (step.requestFields || []).join(', ') || '（整包）'
+    const res = (step.responseFields || []).join(', ') || '（整包 / 试跑后补字段）'
+    lines.push(`第${i + 1}步 ${step.name} · 请求[${req}] · 响应[${res}]`)
+  })
+  return lines.join('\n')
+})
 const filteredComponents = computed(() => {
   const kw = pickerKeyword.value.trim()
   if (!kw) return props.components
@@ -593,8 +843,19 @@ function fieldOptionLabel(name) {
   return raw
 }
 
+const selectedResponseFields = computed(() => {
+  const step = props.allStepSources.find((item) => item.id === props.selectedId)
+  return step?.responseFields || []
+})
+
 const outputShapePreview = computed(() => {
-  const mode = props.outputSchema?.mode || 'last'
+  const mode = props.outputSchema?.mode || 'merge'
+  if (mode === 'merge') {
+    return {
+      _mode: 'merge',
+      ...props.mergePreview,
+    }
+  }
   if (mode === 'firstRow') {
     return {
       _mode: 'firstRow',
@@ -605,7 +866,7 @@ const outputShapePreview = computed(() => {
       username: '…',
     }
   }
-  if (mode !== 'fields') {
+  if (mode === 'last') {
     return {
       _mode: 'last',
       _from: props.lastStepName ? `末步「${props.lastStepName}」完整结果` : '最后一步完整结果',
@@ -616,7 +877,7 @@ const outputShapePreview = computed(() => {
   }
   const fields = props.outputSchema?.fields || []
   if (!fields.length) {
-    return { _mode: 'fields', _note: '未配置字段；保存后按最后一步返回' }
+    return { _mode: 'fields', _note: '未配置字段；保存后按步骤合并返回', ...props.mergePreview }
   }
   const shape = {}
   for (const row of fields) {
@@ -738,6 +999,7 @@ function onOutputModeChange(mode) {
   emit('update-output-schema', {
     ...props.outputSchema,
     mode,
+    reshapeFrom: mode === 'fields' ? 'merge' : (props.outputSchema.reshapeFrom || 'merge'),
     fields: props.outputSchema.fields || [],
   })
 }
@@ -745,53 +1007,294 @@ function onOutputModeChange(mode) {
 function patchOutputField(index, patch) {
   const fields = [...(props.outputSchema.fields || [])]
   fields[index] = { ...fields[index], ...patch }
-  emit('update-output-schema', { ...props.outputSchema, mode: 'fields', fields })
-}
-
-function outputSourceValue(row) {
-  if (!row?.fromNode) return ''
-  const field = String(row.fromPath || '').replace(/^\$\.?/, '')
-  if (!field || field === '*') return `${row.fromNode}:*`
-  return `${row.fromNode}:${field}`
-}
-
-function onOutputSourceChange(index, raw) {
-  let value = String(raw || '').trim()
-  if (!value) return
-  // allow-create: 支持 "nodeId:$.a.b" 或仅路径时挂到末步
-  if (!value.includes(':')) {
-    const last = props.allStepSources[props.allStepSources.length - 1]
-    if (!last) return
-    value = `${last.id}:${value}`
-  }
-  const idx = value.indexOf(':')
-  const fromNode = value.slice(0, idx)
-  const fromField = value.slice(idx + 1)
-  const row = props.outputSchema.fields?.[index] || {}
-  const whole = !fromField || fromField === '*' || fromField === '$'
-  patchOutputField(index, {
-    fromNode,
-    fromPath: whole ? '' : (fromField.startsWith('$.') ? fromField : `$.${fromField}`),
-    key: row.key || (whole ? `${fromNode}_result` : fromField.replace(/^\$\./, '')),
+  emit('update-output-schema', {
+    ...props.outputSchema,
+    mode: 'fields',
+    reshapeFrom: 'merge',
+    fields,
   })
 }
 
-function addOutputField() {
-  const last = props.allStepSources[props.allStepSources.length - 1]
-  if (!last) return
-  const fromField = last.responseFields?.[0] || ''
+function commitReshapeFieldKey(index, raw) {
+  const key = String(raw || '').trim()
+  const prev = props.outputSchema.fields?.[index]?.key
+  if (!key) {
+    ElMessage.warning('字段名不能为空')
+    emit('update-output-schema', { ...props.outputSchema, fields: [...(props.outputSchema.fields || [])] })
+    return
+  }
+  if (!isValidParamKey(key)) {
+    ElMessage.warning('字段名需以字母或下划线开头，仅含字母数字下划线')
+    emit('update-output-schema', { ...props.outputSchema, fields: [...(props.outputSchema.fields || [])] })
+    return
+  }
+  if ((props.outputSchema.fields || []).some((item, i) => i !== index && item.key === key)) {
+    ElMessage.warning(`字段名「${key}」已存在`)
+    emit('update-output-schema', { ...props.outputSchema, fields: [...(props.outputSchema.fields || [])] })
+    return
+  }
+  if (key === prev) return
+  patchOutputField(index, { key })
+}
+
+function portsOfStep(nodeId) {
+  const step = props.allStepSources.find((item) => item.id === nodeId)
+  return (step?.outputPorts || []).map((item) => ({ ...item }))
+}
+
+function emitPortsForStep(nodeId, ports) {
+  emit('update-step-outputs-by-node', { nodeId, outputs: ports })
+}
+
+function pathFromSelect(raw) {
+  const value = String(raw || '').trim()
+  if (!value || value === '*' || value === '$') return ''
+  return value.startsWith('$.') ? value : `$.${value}`
+}
+
+function patchPortForStep(nodeId, index, patch) {
+  const ports = portsOfStep(nodeId)
+  if (!ports[index]) return
+  const next = { ...ports[index], ...patch }
+  if (patch.fromPath != null) {
+    const prevKey = ports[index].key || ''
+    const fromPath = String(patch.fromPath || '')
+    if (fromPath && (/^field\d+$/i.test(prevKey) || prevKey === 'result')) {
+      const leaf = fromPath.replace(/^\$\.?/, '').split('.').filter(Boolean).pop() || ''
+      const suggest = String(leaf).replace(/\[\d+\]/g, '').replace(/[^a-zA-Z0-9_]/g, '_')
+      if (suggest && isValidParamKey(suggest)
+        && !ports.some((item, i) => i !== index && item.key === suggest)) {
+        next.key = suggest
+      }
+    }
+  }
+  ports[index] = next
+  emitPortsForStep(nodeId, ports)
+}
+
+function commitPortKeyForStep(nodeId, index, raw) {
+  const key = String(raw || '').trim()
+  const ports = portsOfStep(nodeId)
+  const prev = ports[index]?.key
+  if (!key) {
+    ElMessage.warning('字段名不能为空')
+    emitPortsForStep(nodeId, ports)
+    return
+  }
+  if (!isValidParamKey(key)) {
+    ElMessage.warning('字段名需以字母或下划线开头，仅含字母数字下划线')
+    emitPortsForStep(nodeId, ports)
+    return
+  }
+  if (ports.some((item, i) => i !== index && item.key === key)) {
+    ElMessage.warning(`字段名「${key}」已存在`)
+    emitPortsForStep(nodeId, ports)
+    return
+  }
+  if (key === prev) return
+  ports[index] = { ...ports[index], key }
+  emitPortsForStep(nodeId, ports)
+}
+
+function removePortForStep(nodeId, index) {
+  const ports = portsOfStep(nodeId)
+  if (ports.length <= 1) {
+    ElMessage.info('至少保留一个出参字段')
+    return
+  }
+  emitPortsForStep(nodeId, ports.filter((_, i) => i !== index))
+}
+
+/** JSON 整形：来自按步骤合并结果 */
+function reshapeSourceValue(row) {
+  if (!row?.fromNode) return ''
+  if (row.fromNode === MERGE_SOURCE_NODE || normalizeFromSource(row.fromSource) === 'merge') {
+    const field = String(row.fromPath || '').replace(/^\$\.?/, '')
+    if (!field || field === '*') return 'merge:*'
+    // $.步骤名.端口 → merge:步骤名:端口
+    const parts = field.split('.')
+    if (parts.length >= 2) {
+      return `merge:${parts[0]}:${parts.slice(1).join('.')}`
+    }
+    return `merge:${field}:*`
+  }
+  // 兼容旧 fromNode=步骤名
+  const field = String(row.fromPath || '').replace(/^\$\.?/, '')
+  const fieldPart = (!field || field === '*') ? '*' : field
+  return `merge:${row.fromNode}:${fieldPart}`
+}
+
+function onReshapeSourceChange(index, raw) {
+  let value = String(raw || '').trim()
+  if (!value) return
+  const row = props.outputSchema.fields?.[index] || {}
+  if (value.startsWith('$.')) {
+    patchOutputField(index, {
+      fromNode: MERGE_SOURCE_NODE,
+      fromSource: 'merge',
+      fromPath: value,
+      key: row.key || value.replace(/^\$\./, '').replace(/\./g, '_'),
+    })
+    return
+  }
+  if (!value.startsWith('merge:')) {
+    value = `merge:${value}`
+  }
+  const parts = value.split(':')
+  const stepName = parts[1] || ''
+  const port = parts.slice(2).join(':') || '*'
+  const whole = !port || port === '*'
+  const fromPath = whole
+    ? (stepName ? `$.${stepName}` : '')
+    : `$.${stepName}.${port}`
+  patchOutputField(index, {
+    fromNode: MERGE_SOURCE_NODE,
+    fromSource: 'merge',
+    fromPath,
+    key: row.key || (whole ? stepName || 'result' : port.replace(/\./g, '_')),
+  })
+}
+
+function addReshapeField() {
+  const first = props.allStepSources[0]
+  const port = first?.outputPorts?.[0]?.key || 'result'
+  const stepName = first?.name || 'step'
   const fields = [...(props.outputSchema.fields || []), {
-    key: fromField || 'result',
-    fromNode: last.id,
-    fromPath: fromField ? `$.${fromField}` : '',
+    key: port,
+    fromNode: MERGE_SOURCE_NODE,
+    fromSource: 'merge',
+    fromPath: `$.${stepName}.${port}`,
     description: '',
   }]
-  emit('update-output-schema', { mode: 'fields', fields })
+  emit('update-output-schema', {
+    ...props.outputSchema,
+    mode: 'fields',
+    reshapeFrom: 'merge',
+    fields,
+  })
 }
 
 function removeOutputField(index) {
   const fields = (props.outputSchema.fields || []).filter((_, i) => i !== index)
-  emit('update-output-schema', { ...props.outputSchema, mode: 'fields', fields })
+  emit('update-output-schema', { ...props.outputSchema, mode: 'fields', reshapeFrom: 'merge', fields })
+}
+
+function stepOutputPathValue(row) {
+  const path = String(row?.fromPath || '').replace(/^\$\.?/, '').trim()
+  return path || '*'
+}
+
+function onStepOutputPathChange(index, raw) {
+  const value = String(raw || '').trim()
+  const whole = !value || value === '*' || value === '$'
+  const fromPath = whole ? '' : (value.startsWith('$.') ? value : `$.${value}`)
+  const patch = { fromPath }
+  // 仍是默认字段名时，用路径末段自动填字段名，方便设计接口
+  const prevKey = props.stepOutputs[index]?.key || ''
+  if (!whole && (/^field\d+$/i.test(prevKey) || prevKey === 'result')) {
+    const path = fromPath.replace(/^\$\.?/, '')
+    const leaf = path.split('.').filter(Boolean).pop() || ''
+    const suggest = String(leaf).replace(/\[\d+\]/g, '').replace(/[^a-zA-Z0-9_]/g, '_')
+    if (suggest && isValidParamKey(suggest)
+      && !props.stepOutputs.some((item, i) => i !== index && item.key === suggest)) {
+      patch.key = suggest
+    }
+  }
+  patchStepOutput(index, patch)
+}
+
+function commitStepOutputKey(index, raw) {
+  const key = String(raw || '').trim()
+  const prev = props.stepOutputs[index]?.key
+  if (!key) {
+    ElMessage.warning('字段名不能为空')
+    // 触发父级重渲染以还原输入框
+    emit('update-step-outputs', props.stepOutputs.map((item) => ({ ...item })))
+    return
+  }
+  if (!isValidParamKey(key)) {
+    ElMessage.warning('字段名需以字母或下划线开头，仅含字母数字下划线')
+    emit('update-step-outputs', props.stepOutputs.map((item) => ({ ...item })))
+    return
+  }
+  if (props.stepOutputs.some((item, i) => i !== index && item.key === key)) {
+    ElMessage.warning(`字段名「${key}」已存在`)
+    emit('update-step-outputs', props.stepOutputs.map((item) => ({ ...item })))
+    return
+  }
+  if (key === prev) return
+  patchStepOutput(index, { key })
+}
+
+function openAddOutput(nodeId = '') {
+  outputDraft.key = ''
+  outputDraft.fromPath = ''
+  outputDraft.description = ''
+  outputDraft.nodeId = nodeId || ''
+  if (nodeId) {
+    showAddMergeOutput.value = nodeId
+    showAddOutput.value = false
+  } else {
+    showAddOutput.value = true
+    showAddMergeOutput.value = ''
+  }
+  nextTick(() => {
+    outputDraftKeyRef.value?.focus?.()
+  })
+}
+
+function cancelAddOutput() {
+  showAddOutput.value = false
+  showAddMergeOutput.value = ''
+  outputDraft.key = ''
+  outputDraft.fromPath = ''
+  outputDraft.description = ''
+  outputDraft.nodeId = ''
+}
+
+function confirmAddOutput() {
+  const key = String(outputDraft.key || '').trim()
+  if (!key) {
+    ElMessage.warning('请填写字段名')
+    return
+  }
+  if (!isValidParamKey(key)) {
+    ElMessage.warning('字段名需以字母或下划线开头，仅含字母数字下划线')
+    return
+  }
+  const nodeId = outputDraft.nodeId || props.selectedId
+  const existing = nodeId && nodeId !== props.selectedId
+    ? portsOfStep(nodeId)
+    : props.stepOutputs
+  if (existing.some((item) => item.key === key)) {
+    ElMessage.warning(`字段名「${key}」已存在`)
+    return
+  }
+  const fromPath = pathFromSelect(outputDraft.fromPath)
+  const row = {
+    key,
+    fromPath,
+    description: String(outputDraft.description || '').trim(),
+  }
+  if (outputDraft.nodeId) {
+    emitPortsForStep(outputDraft.nodeId, [...portsOfStep(outputDraft.nodeId), row])
+  } else {
+    emit('update-step-outputs', [...props.stepOutputs, row])
+  }
+  cancelAddOutput()
+}
+
+function patchStepOutput(index, patch) {
+  const next = props.stepOutputs.map((item, i) => (i === index ? { ...item, ...patch } : item))
+  emit('update-step-outputs', next)
+}
+
+function removeStepOutput(index) {
+  if (props.stepOutputs.length <= 1) {
+    ElMessage.info('至少保留一个出参字段')
+    return
+  }
+  emit('update-step-outputs', props.stepOutputs.filter((_, i) => i !== index))
 }
 
 function confirmAddCustom() {
@@ -1037,6 +1540,17 @@ function focusQuickAdd() {
   margin-top: 4px;
   font-size: 12px;
 }
+.ref-pool-summary {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--qz-fill);
+  border: 1px dashed var(--el-color-primary-light-7);
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
 .footer-hint.linkish {
   cursor: pointer;
   color: var(--el-color-primary);
@@ -1216,6 +1730,85 @@ function focusQuickAdd() {
   border: 1px solid var(--qz-border);
   border-radius: var(--qz-radius);
   background: var(--qz-card);
+}
+.step-output-row {
+  grid-template-columns: minmax(88px, 0.9fr) minmax(120px, 1.4fr) minmax(72px, 1fr) 32px;
+  align-items: center;
+}
+.sout-col-head {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.9fr) minmax(120px, 1.4fr) minmax(72px, 1fr) 32px;
+  gap: 8px;
+  padding: 0 10px 6px;
+  font-size: 11px;
+  color: var(--qz-text-muted);
+}
+.merge-ports-block {
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--qz-border);
+}
+.merge-ports-block:last-of-type {
+  border-bottom: none;
+}
+.merge-step-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 6px 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--qz-text);
+  text-align: left;
+}
+.merge-step-head:hover {
+  color: var(--el-color-primary);
+}
+.merge-port-row {
+  grid-template-columns: minmax(100px, 1fr) minmax(120px, 1.2fr) minmax(64px, 0.8fr) 32px;
+  align-items: center;
+}
+.field-label-prefix {
+  font-size: 11px;
+  color: var(--qz-text-muted);
+  white-space: nowrap;
+  padding-right: 2px;
+}
+.step-output-row .sout-path,
+.merge-port-row .sout-path {
+  width: 100%;
+  min-width: 0;
+}
+.step-output-row .op-btn:disabled,
+.merge-port-row .op-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.section-hint.soft {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--qz-text-muted);
+}
+@media (max-width: 1100px) {
+  .sout-col-head { display: none; }
+  .step-output-row,
+  .merge-port-row {
+    grid-template-columns: 1fr 32px;
+  }
+  .step-output-row .sout-key,
+  .merge-port-row .sout-key { grid-column: 1; }
+  .step-output-row .sout-path,
+  .merge-port-row .sout-path { grid-column: 1; }
+  .step-output-row .sout-desc,
+  .merge-port-row .sout-desc { grid-column: 1; }
+  .step-output-row .op-btn,
+  .merge-port-row .op-btn { grid-column: 2; grid-row: 1; }
 }
 .input-key,
 .input-desc { width: 100%; }

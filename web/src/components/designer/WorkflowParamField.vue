@@ -70,14 +70,14 @@
           filterable
           allow-create
           default-first-option
-          placeholder="选择数据来源，或输入入参键"
+          placeholder="选择数据来源，或输入工作流入参键"
           style="width: 100%"
           @change="onSourceChange"
         >
           <el-option-group label="工作流入参">
             <el-option
               :value="`input:${field.key}`"
-              :label="`本字段同名入参（${field.key}）`"
+              :label="`同名入参（${field.key}）`"
             />
             <el-option
               v-for="item in inputFields"
@@ -86,32 +86,47 @@
               :label="inputOptionLabel(item)"
             />
           </el-option-group>
-          <el-option-group
-            v-for="(step, index) in upstreamSources"
-            :key="step.id"
-            :label="`第 ${index + 1} 步 · ${step.name}`"
-          >
-            <el-option
-              v-for="name in step.requestFields"
-              :key="`${step.id}:request:${name}`"
-              :value="`${step.id}:request:${name}`"
-              :label="`请求 · ${name}`"
-            />
-            <el-option
-              :value="`${step.id}:output:*`"
-              label="响应 · 完整结果"
-            />
-            <el-option
-              v-for="name in step.responseFields"
-              :key="`${step.id}:output:${name}`"
-              :value="`${step.id}:output:${name}`"
-              :label="responseFieldLabel(name)"
-            />
-          </el-option-group>
+          <template v-for="(step, index) in upstreamSources" :key="step.id">
+            <el-option-group :label="`第 ${index + 1} 步 · 入参 · ${step.name}`">
+              <el-option
+                :value="`${step.id}:request:*`"
+                label="完整请求"
+              />
+              <el-option
+                v-for="name in step.requestFields"
+                :key="`${step.id}:request:${name}`"
+                :value="`${step.id}:request:${name}`"
+                :label="name"
+              />
+            </el-option-group>
+            <el-option-group :label="`第 ${index + 1} 步 · 出参 · ${step.name}`">
+              <el-option
+                v-for="port in (step.outputPorts || [{ key: 'result', fromPath: '' }])"
+                :key="`${step.id}:port:${port.key}`"
+                :value="portSourceValue(step.id, port)"
+                :label="portOptionLabel(port)"
+              />
+            </el-option-group>
+            <el-option-group
+              v-if="step.responseFields?.length"
+              :label="`第 ${index + 1} 步 · 响应字段 · ${step.name}`"
+            >
+              <el-option
+                :value="`${step.id}:output:*`"
+                label="完整结果"
+              />
+              <el-option
+                v-for="name in step.responseFields"
+                :key="`${step.id}:output:${name}`"
+                :value="`${step.id}:output:${name}`"
+                :label="responseFieldLabel(name)"
+              />
+            </el-option-group>
+          </template>
         </el-select>
         <p class="data-hint">{{ dataHint }}</p>
         <p v-if="mode === 'data' && !upstreamSources.some((s) => s.responseFields?.length) && upstreamSources.length" class="data-hint muted">
-          前序步骤暂无响应字段；可选「完整结果」，或试跑后选用「首行 · 列名」
+          前序暂无响应字段：可选手输 $.path，或先试跑，字段会自动出现（保存后仍保留）
         </p>
       </div>
     </div>
@@ -160,16 +175,23 @@ const dataHint = computed(() => {
   if (props.binding.mode === 'runtime') {
     const key = props.binding.inputKey || props.field.key
     if (key && key !== props.field.key) {
-      return `调用时填入参 ${key}，映射到本步 ${props.field.key}`
+      return `来自工作流入参 ${key} → 本步 ${props.field.key}`
     }
-    return '试运行 / 调度 / 开放 API 调用时填写'
+    return `来自工作流入参 ${key || props.field.key}（调用时填写）`
   }
   if (props.binding.mode === 'upstream') {
-    const step = props.upstreamSources.find((item) => item.id === props.binding.fromNode)
+    const index = props.upstreamSources.findIndex((item) => item.id === props.binding.fromNode)
+    const step = index >= 0 ? props.upstreamSources[index] : null
+    const stepLabel = index >= 0
+      ? `第 ${index + 1} 步 · ${step?.name || ''}`
+      : (step?.name || '前序步骤')
     const side = props.binding.fromSource === 'request' ? '请求' : '响应'
-    return `取自「${step?.name || '前序步骤'}」的${side}字段`
+    const field = props.binding.fromField === '__whole__' || props.binding.fromField === '*'
+      ? '完整'
+      : (props.binding.fromField || '')
+    return `来自${stepLabel} · ${side} · ${field}`
   }
-  return '从工作流入参或前序步骤的请求/响应取值'
+  return '可选：工作流入参、前序任一步的请求或响应'
 })
 
 function inputOptionLabel(item) {
@@ -181,9 +203,21 @@ function inputOptionLabel(item) {
 
 function responseFieldLabel(name) {
   const raw = String(name || '')
-  if (raw.startsWith('rows[0].')) return `响应 · 首行.${raw.slice('rows[0].'.length)}`
-  if (raw === 'rows') return '响应 · rows（行集）'
-  return `响应 · ${raw}`
+  if (raw.startsWith('rows[0].')) return `首行 · ${raw.slice('rows[0].'.length)}`
+  if (raw === 'rows') return 'rows（行集）'
+  return raw
+}
+
+function portSourceValue(stepId, port) {
+  const path = String(port?.fromPath || '').replace(/^\$\.?/, '').trim()
+  if (!path || path === '*') return `${stepId}:output:*`
+  return `${stepId}:output:${path}`
+}
+
+function portOptionLabel(port) {
+  const path = String(port?.fromPath || '').replace(/^\$\.?/, '').trim()
+  if (!path) return `${port.key}（完整响应）`
+  return `${port.key} ← ${path}`
 }
 
 function emitChange(patch) {

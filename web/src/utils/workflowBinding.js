@@ -6,7 +6,11 @@ const META_KEYS = new Set([
   'componentId', 'componentCode', 'componentName', 'httpMethod',
   'urlTemplate', 'urlPath', 'timeoutMs', 'retryTimes', 'retryIntervalMs', 'requiredParams',
   'provider', 'category', 'sqlPreview', 'customFields',
+  'stepInputs', 'stepOutputs',
 ])
+
+export const DEFAULT_STEP_OUTPUT = { key: 'result', fromPath: '', description: '完整响应' }
+export const MERGE_SOURCE_NODE = '__merge__'
 
 const UPSTREAM_PRESETS = [] // 保留占位；无 responseSchema 时不再塞假字段
 
@@ -105,6 +109,136 @@ export function mergeNodeFields(schemaFieldsList, nodeData) {
   const seen = new Set(schema.map((item) => item.key))
   const extras = customFieldsFromData(nodeData).filter((item) => !seen.has(item.key))
   return [...schema, ...extras]
+}
+
+/** 规范化本步入参声明；空则返回 []（调用方用组件字段兜底） */
+export function normalizeStepInputs(raw) {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set()
+  const rows = []
+  for (const item of raw) {
+    const key = String(item?.key || '').trim()
+    if (!key || !KEY_PATTERN.test(key) || seen.has(key)) continue
+    seen.add(key)
+    rows.push({
+      key,
+      type: item.type || 'string',
+      required: Boolean(item.required),
+      description: item.description || '',
+    })
+  }
+  return rows
+}
+
+/** 规范化本步出参；空则默认 result←整包 */
+export function normalizeStepOutputs(raw, options = {}) {
+  const withDefault = options.withDefault !== false
+  if (!Array.isArray(raw) || !raw.length) {
+    return withDefault ? [{ ...DEFAULT_STEP_OUTPUT }] : []
+  }
+  const seen = new Set()
+  const rows = []
+  for (const item of raw) {
+    const key = String(item?.key || '').trim()
+    if (!key || !KEY_PATTERN.test(key) || seen.has(key)) continue
+    seen.add(key)
+    const rawPath = item.fromPath == null ? '' : String(item.fromPath).trim()
+    let fromPath = ''
+    if (rawPath && rawPath !== '$' && rawPath !== '*') {
+      fromPath = rawPath.startsWith('$') ? rawPath : keyToPath(rawPath)
+    }
+    rows.push({
+      key,
+      fromPath,
+      type: item.type || 'object',
+      description: item.description || '',
+    })
+  }
+  return rows.length ? rows : (withDefault ? [{ ...DEFAULT_STEP_OUTPUT }] : [])
+}
+
+/** 从组件字段推导 stepInputs（无持久化声明时） */
+export function deriveStepInputsFromFields(fields) {
+  return (fields || []).map((field) => ({
+    key: field.key,
+    type: field.type || 'string',
+    required: Boolean(field.required),
+    description: field.description || field.key,
+  }))
+}
+
+/** 读取节点有效入参声明（持久化 ∪ 组件字段） */
+export function resolveStepInputs(nodeData, schemaFieldsList) {
+  const stored = normalizeStepInputs(nodeData?.stepInputs)
+  if (stored.length) return stored
+  return deriveStepInputsFromFields(mergeNodeFields(schemaFieldsList, nodeData))
+}
+
+/** 读取节点有效出参声明 */
+export function resolveStepOutputs(nodeData) {
+  return normalizeStepOutputs(nodeData?.stepOutputs)
+}
+
+/** 各步 stepInputs 全量并集（1B） */
+export function unionStepInputs(stepsInputs, panelOverrides = []) {
+  const map = new Map()
+  for (const field of panelOverrides || []) {
+    const key = String(field?.key || '').trim()
+    if (!key) continue
+    map.set(key, {
+      key,
+      type: field.type || 'string',
+      required: Boolean(field.required),
+      description: field.description || '',
+    })
+  }
+  for (const list of stepsInputs || []) {
+    for (const field of list || []) {
+      const key = String(field?.key || '').trim()
+      if (!key) continue
+      if (map.has(key)) {
+        const cur = map.get(key)
+        map.set(key, {
+          key,
+          type: cur.type || field.type || 'string',
+          required: cur.required || Boolean(field.required),
+          description: cur.description || field.description || '',
+        })
+      } else {
+        map.set(key, {
+          key,
+          type: field.type || 'string',
+          required: Boolean(field.required),
+          description: field.description || '',
+        })
+      }
+    }
+  }
+  return [...map.values()]
+}
+
+/** 预览按步骤名合并的出参形状 */
+export function previewMergeOutputShape(stepSources) {
+  const shape = {}
+  const used = new Set()
+  for (const step of stepSources || []) {
+    let name = step.name || step.id || 'step'
+    let unique = name
+    let i = 2
+    while (used.has(unique)) unique = `${name}_${i++}`
+    used.add(unique)
+    const ports = step.outputPorts?.length
+      ? step.outputPorts
+      : [{ key: 'result', fromPath: '' }]
+    const obj = {}
+    for (const port of ports) {
+      obj[port.key] = port.fromPath
+        ? `← ${port.fromPath}`
+        : '← 完整响应'
+    }
+    shape[unique] = obj
+  }
+  return shape
 }
 
 export function inferBindingsForNode(nodeId, fields, nodeData, mappings, inputKeys) {
@@ -370,13 +504,17 @@ export function collectUpstreamDeps(bindings, ctx = {}) {
   const deps = []
   for (const binding of bindings || []) {
     if (binding?.mode !== 'upstream' || !binding.fromNode) continue
-    if (seen.has(binding.fromNode)) continue
-    seen.add(binding.fromNode)
+    const side = binding.fromSource === 'request' ? '请求' : '响应'
+    const depKey = `${binding.fromNode}:${side}`
+    if (seen.has(depKey)) continue
+    seen.add(depKey)
     const fromIndex = ctx.nodeIndexes?.[binding.fromNode]
+    const stepPrefix = fromIndex != null ? `第${fromIndex}步` : '上游'
     deps.push({
       fromNode: binding.fromNode,
       fromIndex: fromIndex || null,
-      label: fromIndex != null ? `← 第${fromIndex}步` : '← 上游',
+      fromSource: binding.fromSource === 'request' ? 'request' : 'output',
+      label: `← ${stepPrefix}·${side}`,
     })
   }
   return deps
@@ -398,28 +536,31 @@ export function bindingSummary(binding, field, ctx = {}) {
     const stepPrefix = stepIndex != null ? `第${stepIndex}步` : stepLabel
     const side = binding.fromSource === 'request' ? '请求' : '响应'
     const key = binding.fromField === '__whole__' || binding.fromField === '*'
-      ? '完整结果'
+      ? '完整'
       : (binding.fromField || field?.key || '')
-    return `来自${stepPrefix}·${side} ${key}`
+    return `← ${stepPrefix}·${side}·${key}`
   }
   if (binding.mode === 'runtime') {
     const inputKey = binding.inputKey || field?.key || binding.key
     const label = ctx.inputLabels?.[inputKey]
-    if (label && label !== inputKey) return `来自入参「${label}」`
-    return `来自入参 ${inputKey}`
+    if (label && label !== inputKey) return `← 工作流入参「${label}」`
+    return `← 工作流入参 ${inputKey}`
   }
   return '未配置'
 }
 
-/** 规范化出参配置。forPersist=true 时，空 fields 的投影落库为 last */
+/** 规范化出参配置。forPersist=true 时，空 fields 的投影落库为 merge */
 export function normalizeOutputSchema(raw, options = {}) {
   const forPersist = !!options.forPersist
+  const preferMerge = !!options.preferMerge
   if (!raw || typeof raw !== 'object') {
-    return { mode: 'last', fields: [] }
+    return { mode: preferMerge || forPersist ? 'merge' : 'last', fields: [], reshapeFrom: 'merge' }
   }
   let mode = 'last'
   if (raw.mode === 'fields') mode = 'fields'
   else if (raw.mode === 'firstRow' || raw.mode === 'first_row') mode = 'firstRow'
+  else if (raw.mode === 'merge') mode = 'merge'
+  else if (preferMerge && !raw.mode) mode = 'merge'
   const fields = Array.isArray(raw.fields)
     ? raw.fields
       .filter((item) => item?.key && item?.fromNode)
@@ -429,31 +570,71 @@ export function normalizeOutputSchema(raw, options = {}) {
         if (rawPath && rawPath !== '$' && rawPath !== '*') {
           fromPath = rawPath.startsWith('$') ? rawPath : keyToPath(rawPath)
         }
+        const fromSource = normalizeFromSource(item.fromSource)
         return {
           key: String(item.key).trim(),
           fromNode: String(item.fromNode).trim(),
           fromPath,
+          fromSource,
           description: item.description || '',
         }
       })
     : []
-  // 仅持久化时把空投影收成 last；编辑态保留 fields 以便继续加字段
+  const reshapeFrom = raw.reshapeFrom === 'last' ? 'last' : 'merge'
+  // 仅持久化时把空投影收成 merge（新产品默认）或 last（兼容）
   if (forPersist && mode === 'fields' && !fields.length) {
-    mode = 'last'
+    mode = preferMerge ? 'merge' : 'last'
   }
-  return { mode, fields }
+  return { mode, fields, reshapeFrom }
+}
+
+export function normalizeFromSource(raw) {
+  const value = String(raw || '').trim().toLowerCase()
+  if (value === 'request') return 'request'
+  if (value === 'input' || value === '__input__') return 'input'
+  if (value === 'merge' || value === '__merge__') return 'merge'
+  return 'output'
+}
+
+/** 从 outputSchema JSON 中抽出试跑学到的响应字段（与 mode/fields 同级挂载） */
+export function extractLearnedSchemas(raw) {
+  if (!raw || typeof raw !== 'object') return {}
+  const source = raw.learnedSchemas
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {}
+  const result = {}
+  for (const [nodeId, keys] of Object.entries(source)) {
+    if (!nodeId || !Array.isArray(keys)) continue
+    const cleaned = keys.map((item) => String(item || '').trim()).filter(Boolean)
+    if (cleaned.length) result[nodeId] = [...new Set(cleaned)]
+  }
+  return result
+}
+
+/** 把 learnedSchemas 并入待持久化的 outputSchema */
+export function attachLearnedSchemas(schema, learned) {
+  const base = schema && typeof schema === 'object' ? { ...schema } : { mode: 'merge', fields: [], reshapeFrom: 'merge' }
+  const cleaned = extractLearnedSchemas({ learnedSchemas: learned })
+  if (Object.keys(cleaned).length) {
+    base.learnedSchemas = cleaned
+  } else {
+    delete base.learnedSchemas
+  }
+  return base
 }
 
 export function outputSchemaHint(schema) {
   const normalized = normalizeOutputSchema(schema)
   if (schema?.mode === 'fields' && !(schema.fields || []).length) {
-    return '字段投影尚未配置，对外将按「最后一步完整结果」返回'
+    return '字段投影尚未配置，对外将按「按步骤合并」返回'
   }
   if (normalized.mode === 'fields' && normalized.fields.length) {
-    return `对外出参：已投影 ${normalized.fields.length} 个字段（与开放 API 一致）`
+    return `对外出参：JSON 整形 ${normalized.fields.length} 个字段（源：按步骤合并）`
   }
   if (normalized.mode === 'firstRow') {
     return '对外出参：查询结果首行对象（与开放 API 一致）'
+  }
+  if (normalized.mode === 'merge') {
+    return '对外出参：按步骤名合并各步出参（与开放 API 一致）'
   }
   return '对外出参：最后一步完整结果（与开放 API 一致）'
 }
