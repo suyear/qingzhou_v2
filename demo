@@ -1,0 +1,11 @@
+{
+  "说明": "开放 API / 试跑 data.output 正确形态（工作流「按照ID查询用户」配置出参=查询首行后）",
+  "data.output": {
+    "id": 1,
+    "username": "admin",
+    "display_name": "系统管理员",
+    "role": "ADMIN",
+    "status": 1
+  },
+  "对比_旧日志预览键": "节点调试日志里曾经出现 preview，不等于对外契约；业务键统一为 rows，首行模式再取 rows[0]"
+}
