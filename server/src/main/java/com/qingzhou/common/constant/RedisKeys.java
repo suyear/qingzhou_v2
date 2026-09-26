@@ -33,6 +33,11 @@ public final class RedisKeys {
         return "qz:openapi:qps:" + appKey + ":" + epochSecond;
     }
 
+    /** OpenAPI 幂等缓存：qz:openapi:idem:{appKey}:{fingerprint} */
+    public static String openApiIdem(String appKey, String fingerprint) {
+        return "qz:openapi:idem:" + appKey + ":" + fingerprint;
+    }
+
     /** OAuth2 客户端凭证 AccessToken：qz:oauth2:token:{credentialId} */
     public static String oauth2Token(Long credentialId) {
         return "qz:oauth2:token:" + credentialId;

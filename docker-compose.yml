@@ -16,6 +16,7 @@ services:
       - ./sql/V4__database_component.sql:/docker-entrypoint-initdb.d/03_V4.sql:ro
       - ./sql/V5__credential_auth_types.sql:/docker-entrypoint-initdb.d/04_V5.sql:ro
       - ./sql/V6__product_foundation.sql:/docker-entrypoint-initdb.d/05_V6.sql:ro
+      - ./sql/V11__execution_list_index.sql:/docker-entrypoint-initdb.d/06_V11.sql:ro
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--default-authentication-plugin=mysql_native_password"]
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${DB_PASSWORD:-qingzhou_root}"]

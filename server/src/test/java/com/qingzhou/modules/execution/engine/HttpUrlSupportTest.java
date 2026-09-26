@@ -30,6 +30,26 @@ class HttpUrlSupportTest {
     }
 
     @Test
+    void renderUrlRejectsControlCharacters() {
+        assertThrows(BizException.class, () -> HttpUrlSupport.renderUrl(
+                "https://example.com/users/${id}", Map.of("id", "1\n2"), null));
+    }
+
+    @Test
+    void maskSecretHidesAccessTokenAndPasswords() {
+        assertEquals(
+                "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=ww&corpsecret=***",
+                HttpUrlSupport.maskSecret("https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=ww&corpsecret=SECRET"));
+        assertTrue(HttpUrlSupport.maskSecret("https://example.com/a?password=secret&x=1").contains("password=***"));
+    }
+
+    @Test
+    void maskLoggedBodyHidesSecretFields() {
+        assertEquals("{\"password\":\"***\",\"name\":\"n\"}",
+                HttpUrlSupport.maskLoggedBody("{\"password\":\"abc\",\"name\":\"n\"}"));
+    }
+
+    @Test
     void maskSecretHidesAccessToken() {
         assertEquals(
                 "https://qyapi.weixin.qq.com/cgi-bin/user/get?access_token=***",

@@ -116,24 +116,25 @@ public class NodeHttpInvoker {
             int limit = maxResponseBytes > 0 ? maxResponseBytes : DEFAULT_BODY_LIMIT_BYTES;
             ReadBody read = readLimited(response.body(), limit);
             if (read.truncated()) {
-                log.warn("节点 HTTP 响应体超限 uri={} limit={}", uri, limit);
+                log.warn("节点 HTTP 响应体超限 uri={} limit={}", safeUri(uri), limit);
                 return new HttpCallResult(response.statusCode(), read.text(), false,
                         "第三方响应体超过上限 " + limit + " 字节", response.headers().map());
             }
             return new HttpCallResult(response.statusCode(), read.text(), false, null, response.headers().map());
         } catch (java.net.http.HttpTimeoutException timeout) {
-            log.warn("节点 HTTP 超时 uri={}", uri);
+            log.warn("节点 HTTP 超时 uri={}", safeUri(uri));
             return new HttpCallResult(0, null, true, "第三方接口超时", Map.of());
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             return new HttpCallResult(0, null, true, "调用被中断", Map.of());
         } catch (Exception ex) {
-            log.warn("节点 HTTP 失败 uri={} msg={}", uri, ex.getMessage());
-            return new HttpCallResult(0, null, false, ex.getMessage(), Map.of());
+            String safe = HttpUrlSupport.maskSecret(ex.getMessage());
+            log.warn("节点 HTTP 失败 uri={} msg={}", safeUri(uri), safe);
+            return new HttpCallResult(0, null, false, safe, Map.of());
         }
     }
 
-    static ReadBody readLimited(InputStream in, int limit) throws Exception {
+    public static ReadBody readLimited(InputStream in, int limit) throws Exception {
         if (in == null) {
             return new ReadBody("", false);
         }
@@ -174,6 +175,10 @@ public class NodeHttpInvoker {
         return values.filter(list -> !list.isEmpty()).map(list -> list.get(0)).orElse(null);
     }
 
-    record ReadBody(String text, boolean truncated) {
+    public record ReadBody(String text, boolean truncated) {
+    }
+
+    private static String safeUri(URI uri) {
+        return HttpUrlSupport.maskSecret(uri == null ? null : uri.toString());
     }
 }

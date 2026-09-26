@@ -20,6 +20,9 @@
 
 - 路径 `/openapi/**`，HMAC 签名 + Nonce 防重放 + 可选 IP 白名单 + QPS  
 - 与控制台登录无关  
+- 可选 `X-Idempotency-Key`（8–128 位）。同一应用、同一路径、同一请求体在 `qingzhou.openapi.idempotency-ttl-seconds`（默认 24 小时）内回放同一响应；请求体不同返回 409。Nonce 每次仍须唯一  
+- 对外 `data.errorMsg` 不包含节点名称，也不回传 SQL / 驱动原文。控制台执行记录仍保留原始失败原因  
+- HTTP 节点默认拒绝回环、私网、链路本地、IPv4-mapped IPv6 与 ULA。仅当 `HTTP_ALLOW_PRIVATE=true` 时放行私网（链路本地与云元数据主机名始终拒绝）
 
 ## 审计
 

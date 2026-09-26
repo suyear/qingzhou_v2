@@ -33,6 +33,10 @@ public class DatasourcePoolManager {
         try {
             return pool.getConnection();
         } catch (SQLException ex) {
+            // 池耗尽超时不是坏连接，拆掉池会放大故障
+            if (isPoolTimeout(ex)) {
+                throw ex;
+            }
             evict(credentialId);
             HikariDataSource retry = pools.computeIfAbsent(credential.getId(), id -> createPool(requireDatabase(credentialId)));
             return retry.getConnection();
@@ -90,6 +94,16 @@ public class DatasourcePoolManager {
         config.setConnectionTestQuery(JdbcCredentialSupport.validationQuery(endpoint.dbType()));
         config.setAutoCommit(true);
         return new HikariDataSource(config);
+    }
+
+    private static boolean isPoolTimeout(SQLException ex) {
+        if (ex instanceof java.sql.SQLTimeoutException) {
+            return true;
+        }
+        String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase(java.util.Locale.ROOT);
+        return message.contains("connection is not available")
+                || message.contains("timed out")
+                || message.contains("timeout");
     }
 
     private Credential requireDatabase(Long credentialId) {

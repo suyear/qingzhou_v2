@@ -9,6 +9,7 @@ import com.qingzhou.common.exception.BizException;
 import com.qingzhou.modules.credential.entity.Credential;
 import com.qingzhou.modules.credential.service.CredentialService;
 import com.qingzhou.modules.credential.support.HttpAuthCredentialSupport;
+import com.qingzhou.modules.execution.engine.NodeHttpInvoker;
 import com.qingzhou.modules.execution.engine.OutboundUrlGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.io.InputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -91,15 +93,19 @@ public class OAuth2ClientCredentialsClient {
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                try (InputStream ignored = response.body()) {
+                    // 丢弃错误响应，避免连接悬挂
+                }
                 throw new BizException(ResultCode.THIRD_PARTY_ERROR,
                         "OAuth2 换票失败 HTTP " + response.statusCode());
             }
-            String responseBody = response.body();
-            if (responseBody != null && responseBody.length() > 65536) {
+            NodeHttpInvoker.ReadBody read = NodeHttpInvoker.readLimited(response.body(), 65_536);
+            if (read.truncated()) {
                 throw new BizException(ResultCode.THIRD_PARTY_ERROR, "OAuth2 响应体过大");
             }
+            String responseBody = read.text();
             Map<String, Object> json = objectMapper.readValue(responseBody, new TypeReference<>() {
             });
             Object token = json.get("access_token");
@@ -121,7 +127,7 @@ public class OAuth2ClientCredentialsClient {
         } catch (BizException ex) {
             throw ex;
         } catch (Exception ex) {
-            throw new BizException(ResultCode.THIRD_PARTY_ERROR, "OAuth2 换票失败: " + ex.getMessage());
+            throw new BizException(ResultCode.THIRD_PARTY_ERROR, "OAuth2 换票失败");
         }
     }
 

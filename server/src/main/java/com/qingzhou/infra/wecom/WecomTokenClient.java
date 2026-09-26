@@ -57,13 +57,21 @@ public class WecomTokenClient {
             } catch (RestClientException http) {
                 lastHttp = http;
                 log.warn("企业微信 gettoken HTTP 异常, attempt={}/{} msg={}",
-                        attempt + 1, fetchRetry + 1, http.getMessage());
+                        attempt + 1, fetchRetry + 1, safeMessage(http));
             }
         }
         if (lastTimeout != null) {
             throw new BizException(ResultCode.THIRD_PARTY_TIMEOUT, "企业微信 gettoken 超时");
         }
         throw new BizException(ResultCode.THIRD_PARTY_ERROR,
-                "企业微信 gettoken 调用失败: " + (lastHttp == null ? "unknown" : lastHttp.getMessage()));
+                "企业微信 gettoken 调用失败: " + safeMessage(lastHttp));
+    }
+
+    /** 异常信息里可能带上含 corpsecret 的请求 URL，落日志和接口前必须打码。 */
+    private static String safeMessage(Exception ex) {
+        if (ex == null || ex.getMessage() == null || ex.getMessage().isBlank()) {
+            return "调用失败";
+        }
+        return com.qingzhou.modules.execution.engine.HttpUrlSupport.maskSecret(ex.getMessage());
     }
 }

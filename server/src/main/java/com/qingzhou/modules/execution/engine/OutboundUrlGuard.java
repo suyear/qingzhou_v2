@@ -4,6 +4,7 @@ import com.qingzhou.common.api.ResultCode;
 import com.qingzhou.common.exception.BizException;
 import org.springframework.util.StringUtils;
 
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
@@ -40,8 +41,13 @@ public final class OutboundUrlGuard {
             throw new BizException(ResultCode.BAD_REQUEST, "出站 URL 缺少主机名");
         }
         String hostLower = host.toLowerCase(Locale.ROOT);
-        if (BLOCKED_HOSTS.contains(hostLower) || hostLower.endsWith(".internal")) {
-            throw new BizException(ResultCode.BAD_REQUEST, "出站目标主机不允许访问");
+        if (BLOCKED_HOSTS.contains(hostLower)
+                || hostLower.endsWith(".internal")
+                || hostLower.endsWith(".localhost")
+                || "localhost".equals(hostLower)) {
+            if (!allowPrivateNetwork || BLOCKED_HOSTS.contains(hostLower) || hostLower.endsWith(".internal")) {
+                throw new BizException(ResultCode.BAD_REQUEST, "出站目标主机不允许访问");
+            }
         }
         InetAddress[] addresses;
         try {
@@ -64,8 +70,15 @@ public final class OutboundUrlGuard {
         if (address == null) {
             return true;
         }
+        InetAddress mapped = unwrapV4Mapped(address);
+        if (mapped != address) {
+            return isBlockedAddress(mapped, allowPrivateNetwork);
+        }
         if (address.isAnyLocalAddress() || address.isMulticastAddress()) {
             return true;
+        }
+        if (address instanceof Inet6Address inet6 && isUniqueLocal(inet6)) {
+            return !allowPrivateNetwork;
         }
         if (address.isLinkLocalAddress()) {
             return true;
@@ -91,5 +104,35 @@ public final class OutboundUrlGuard {
             }
         }
         return false;
+    }
+
+    /** ::ffff:x.x.x.x 在 JDK 里不算 loopback / site-local，必须先拆成 IPv4 再判断。 */
+    static InetAddress unwrapV4Mapped(InetAddress address) {
+        if (!(address instanceof Inet6Address inet6)) {
+            return address;
+        }
+        byte[] bytes = inet6.getAddress();
+        if (bytes.length != 16) {
+            return address;
+        }
+        for (int i = 0; i < 10; i++) {
+            if (bytes[i] != 0) {
+                return address;
+            }
+        }
+        if ((bytes[10] & 0xFF) != 0xFF || (bytes[11] & 0xFF) != 0xFF) {
+            return address;
+        }
+        try {
+            return InetAddress.getByAddress(new byte[] {bytes[12], bytes[13], bytes[14], bytes[15]});
+        } catch (UnknownHostException ex) {
+            return address;
+        }
+    }
+
+    /** fc00::/7 unique local。Java 的 isSiteLocalAddress 只覆盖已废弃的 fec0::/10。 */
+    private static boolean isUniqueLocal(Inet6Address address) {
+        byte[] bytes = address.getAddress();
+        return bytes.length == 16 && (bytes[0] & 0xFE) == 0xFC;
     }
 }

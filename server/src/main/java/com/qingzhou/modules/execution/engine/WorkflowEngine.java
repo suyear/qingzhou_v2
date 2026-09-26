@@ -28,8 +28,10 @@ import com.qingzhou.modules.workflow.service.WorkflowSnapshotService;
 import com.qingzhou.modules.workflow.support.DagScheduler;
 import com.qingzhou.modules.workflow.support.DagValidator;
 import com.qingzhou.modules.workflow.support.InputSchemaValidator;
+import com.qingzhou.modules.workflow.support.WorkflowSnapshotCache;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -44,7 +46,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -69,6 +75,10 @@ public class WorkflowEngine {
     private final CredentialService credentialService;
     private final Jsons jsons;
     private final ObjectMapper objectMapper;
+    private final WorkflowSnapshotCache snapshotCache;
+
+    @Value("${qingzhou.execution.max-parallel:8}")
+    private int maxParallel;
 
     public ExecutionVO tryRun(Long workflowId, Map<String, Object> input) {
         return run(workflowId, "TRY_RUN", null, input);
@@ -132,31 +142,88 @@ public class WorkflowEngine {
         Map<String, Object> requestPayloads = new ConcurrentHashMap<>();
         Map<Long, ApiComponent> componentCache = preloadComponents(graph);
         AtomicBoolean failed = new AtomicBoolean(false);
+        AtomicBoolean deadlineHit = new AtomicBoolean(false);
         AtomicReference<String> failMsg = new AtomicReference<>();
         LocalDateTime started = LocalDateTime.now();
+        int budgetMs = ExecutionLimits.workflowTimeout(runtime.getTimeoutMs());
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs);
+        int parallelism = Math.max(1, maxParallel);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (List<String> level : levels) {
                 if (failed.get()) {
                     break;
                 }
+                if (ExecutionLimits.deadlineReached(deadlineNanos)) {
+                    failed.set(true);
+                    deadlineHit.set(true);
+                    failMsg.compareAndSet(null, "工作流执行超时（" + budgetMs + "ms）");
+                    break;
+                }
+                Semaphore gate = new Semaphore(parallelism);
+                long waitMs = Math.max(1, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
                 List<CompletableFuture<Void>> futures = new ArrayList<>();
                 for (String nodeId : level) {
                     futures.add(CompletableFuture.runAsync(() -> {
+                        boolean acquired = false;
                         try {
+                            acquired = gate.tryAcquire(waitMs, TimeUnit.MILLISECONDS);
+                            if (!acquired || ExecutionLimits.deadlineReached(deadlineNanos)) {
+                                failed.set(true);
+                                deadlineHit.set(true);
+                                failMsg.compareAndSet(null, "工作流执行超时（" + budgetMs + "ms）");
+                                return;
+                            }
                             Object output = executeNode(
-                                    instance, runtime, nodeMap.get(nodeId), input, outputs, requestPayloads, mappings, componentCache);
+                                    instance, runtime, nodeMap.get(nodeId), input, outputs, requestPayloads,
+                                    mappings, componentCache, deadlineNanos);
                             if (output != null) {
                                 outputs.put(nodeId, output);
                             }
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                            failed.set(true);
+                            deadlineHit.set(true);
+                            failMsg.compareAndSet(null, "工作流执行超时（" + budgetMs + "ms）");
                         } catch (Exception ex) {
                             failed.set(true);
-                            failMsg.compareAndSet(null, ex.getMessage());
-                            log.warn("节点执行失败 nodeId={} msg={}", nodeId, ex.getMessage());
+                            String message = ex.getMessage();
+                            if (!StringUtils.hasText(message)) {
+                                message = "节点执行失败";
+                            }
+                            failMsg.compareAndSet(null, message);
+                            if (FailureCategory.looksLikeTimeout(message)) {
+                                deadlineHit.set(true);
+                            }
+                            log.warn("节点执行失败 nodeId={} msg={}", nodeId, message);
+                        } finally {
+                            if (acquired) {
+                                gate.release();
+                            }
                         }
                     }, executor));
                 }
-                CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+                try {
+                    long remaining = Math.max(1, TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime()));
+                    CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).get(remaining, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException ex) {
+                    futures.forEach(future -> future.cancel(true));
+                    failed.set(true);
+                    deadlineHit.set(true);
+                    failMsg.compareAndSet(null, "工作流执行超时（" + budgetMs + "ms）");
+                    break;
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    futures.forEach(future -> future.cancel(true));
+                    failed.set(true);
+                    deadlineHit.set(true);
+                    failMsg.compareAndSet(null, "工作流执行被中断");
+                    break;
+                } catch (ExecutionException ex) {
+                    failed.set(true);
+                    Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                    failMsg.compareAndSet(null, cause.getMessage() == null ? "节点执行失败" : cause.getMessage());
+                }
             }
         }
 
@@ -167,7 +234,11 @@ public class WorkflowEngine {
         if (!outputs.isEmpty()) {
             instance.setOutputResult(jsons.toJson(outputs));
         }
-        if (failed.get()) {
+        if (deadlineHit.get()) {
+            instance.setStatus("TIMEOUT");
+            String msg = failMsg.get();
+            instance.setErrorMsg(StringUtils.hasText(msg) ? msg : "工作流执行超时（" + budgetMs + "ms）");
+        } else if (failed.get()) {
             String msg = failMsg.get();
             boolean timedOut = FailureCategory.looksLikeTimeout(msg)
                     || executionNodeLogService.lambdaQuery()
@@ -198,7 +269,8 @@ public class WorkflowEngine {
             Map<String, Object> outputs,
             Map<String, Object> requestPayloads,
             List<ParamMappingItem> mappings,
-            Map<Long, ApiComponent> componentCache) {
+            Map<Long, ApiComponent> componentCache,
+            long deadlineNanos) {
         ApiComponent component = resolveComponent(dagNode, componentCache);
         Map<String, Object> payload = buildPayload(dagNode, input, outputs, requestPayloads, mappings);
         requestPayloads.put(dagNode.getId(), payload);
@@ -212,13 +284,18 @@ public class WorkflowEngine {
         nodeLog.setStatus("RUNNING");
         nodeLog.setStartTime(LocalDateTime.now());
         executionNodeLogService.save(nodeLog);
-        if (DatabaseComponentSupport.isDatabase(component)) {
-            return executeDatabaseNode(nodeLog, component, payload);
+        if (ExecutionLimits.deadlineReached(deadlineNanos)) {
+            failLog(nodeLog, "TIMEOUT", "工作流执行超时");
+            throw new BizException(ResultCode.THIRD_PARTY_TIMEOUT, "工作流执行超时");
         }
-        return executeHttpNode(nodeLog, workflow, component, payload);
+        if (DatabaseComponentSupport.isDatabase(component)) {
+            return executeDatabaseNode(nodeLog, component, payload, deadlineNanos);
+        }
+        return executeHttpNode(nodeLog, workflow, component, payload, deadlineNanos);
     }
 
-    private Object executeDatabaseNode(ExecutionNodeLog nodeLog, ApiComponent component, Map<String, Object> payload) {
+    private Object executeDatabaseNode(
+            ExecutionNodeLog nodeLog, ApiComponent component, Map<String, Object> payload, long deadlineNanos) {
         DatabaseComponentSupport.DatabaseSpec spec;
         try {
             spec = DatabaseComponentSupport.spec(component, jsons);
@@ -235,8 +312,7 @@ public class WorkflowEngine {
         nodeLog.setRequestHeaders(jsons.toJson(Map.of("datasourceId", spec.datasourceId(), "maxRows", spec.maxRows())));
         executionNodeLogService.updateById(nodeLog);
 
-        int timeout = component.getTimeoutMs() == null ? 10000 : component.getTimeoutMs();
-        int retryTimes = component.getRetryTimes() == null ? 0 : component.getRetryTimes();
+        int retryTimes = ExecutionLimits.retryTimes(component.getRetryTimes());
         if ("UPDATE".equals(spec.method())) {
             retryTimes = 0;
         }
@@ -244,6 +320,11 @@ public class WorkflowEngine {
         int attempted = 0;
         for (int i = 0; i <= retryTimes; i++) {
             attempted = i;
+            int timeout = ExecutionLimits.callTimeout(ExecutionLimits.nodeTimeout(component.getTimeoutMs()), deadlineNanos);
+            if (timeout <= 0) {
+                last = DbCallResult.fail(null, true, "工作流执行超时");
+                break;
+            }
             last = nodeJdbcInvoker.invoke(spec, payload, timeout);
             if (last.success()) {
                 break;
@@ -253,9 +334,10 @@ public class WorkflowEngine {
                 break;
             }
             try {
-                Thread.sleep(component.getRetryIntervalMs() == null ? 1000 : component.getRetryIntervalMs());
+                ExecutionLimits.sleep(component.getRetryIntervalMs() == null ? 1000 : component.getRetryIntervalMs(), deadlineNanos);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                last = DbCallResult.fail(last == null ? null : last.displayUrl(), true, "工作流执行超时");
                 break;
             }
         }
@@ -265,8 +347,9 @@ public class WorkflowEngine {
         if (last != null) {
             nodeLog.setRequestUrl(last.displayUrl());
             nodeLog.setResponseStatus(last.success() ? 200 : (last.timeout() ? 504 : 400));
-            nodeLog.setResponseBody(jsons.toJson(last.logBody() == null || last.logBody().isEmpty()
-                    ? last.output() : last.logBody()));
+            String logged = jsons.toJson(last.logBody() == null || last.logBody().isEmpty()
+                    ? last.output() : last.logBody());
+            nodeLog.setResponseBody(HttpUrlSupport.maskLoggedBody(logged));
         }
         if (last != null && last.success()) {
             nodeLog.setStatus("SUCCESS");
@@ -284,7 +367,8 @@ public class WorkflowEngine {
             ExecutionNodeLog nodeLog,
             Workflow workflow,
             ApiComponent component,
-            Map<String, Object> payload) {
+            Map<String, Object> payload,
+            long deadlineNanos) {
 
         String token;
         try {
@@ -309,17 +393,21 @@ public class WorkflowEngine {
         headers.putAll(auth.headers());
         nodeLog.setRequestUrl(HttpUrlSupport.maskSecret(uri.toString()));
         nodeLog.setRequestHeaders(jsons.toJson(HttpAuthSupport.maskHeaders(headers)));
-        nodeLog.setRequestBody(HttpUrlSupport.truncateBody(body));
+        nodeLog.setRequestBody(HttpUrlSupport.maskLoggedBody(body));
         executionNodeLogService.updateById(nodeLog);
 
-        int timeout = component.getTimeoutMs() == null ? 10000 : component.getTimeoutMs();
-        int retryTimes = component.getRetryTimes() == null ? 0 : component.getRetryTimes();
+        int retryTimes = ExecutionLimits.retryTimes(component.getRetryTimes());
         int retryInterval = component.getRetryIntervalMs() == null ? 1000 : component.getRetryIntervalMs();
 
         HttpCallResult last = null;
         int attempted = 0;
         for (int i = 0; i <= retryTimes; i++) {
             attempted = i;
+            int timeout = ExecutionLimits.callTimeout(ExecutionLimits.nodeTimeout(component.getTimeoutMs()), deadlineNanos);
+            if (timeout <= 0) {
+                last = new HttpCallResult(0, null, true, "工作流执行超时", Map.of());
+                break;
+            }
             last = nodeHttpInvoker.invoke(component.getHttpMethod(), uri, headers, body, timeout, auth);
             if (last.success()) {
                 break;
@@ -329,9 +417,10 @@ public class WorkflowEngine {
                 break;
             }
             try {
-                Thread.sleep(retryInterval);
+                ExecutionLimits.sleep(retryInterval, deadlineNanos);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                last = new HttpCallResult(0, null, true, "工作流执行超时", Map.of());
                 break;
             }
         }
@@ -341,7 +430,7 @@ public class WorkflowEngine {
         nodeLog.setRetryCount(attempted);
         if (last != null) {
             nodeLog.setResponseStatus(last.status() == 0 ? null : last.status());
-            nodeLog.setResponseBody(HttpUrlSupport.truncateBody(last.body()));
+            nodeLog.setResponseBody(HttpUrlSupport.maskLoggedBody(last.body()));
         }
         if (last != null && last.success()) {
             nodeLog.setStatus("SUCCESS");
@@ -536,7 +625,7 @@ public class WorkflowEngine {
     private RunSpec resolveRuntime(Workflow workflow, String triggerType, Long preferredSnapshotId) {
         if ("REPLAY".equals(triggerType)) {
             if (preferredSnapshotId != null) {
-                WorkflowSnapshot snapshot = workflowSnapshotService.getById(preferredSnapshotId);
+                WorkflowSnapshot snapshot = snapshotCache.getById(preferredSnapshotId, workflowSnapshotService::getById);
                 if (snapshot != null && workflow.getId().equals(snapshot.getWorkflowId())) {
                     return new RunSpec(overlay(workflow, snapshot), snapshot.getId());
                 }
@@ -555,11 +644,16 @@ public class WorkflowEngine {
         if ("DISABLED".equals(workflow.getStatus())) {
             throw new BizException(ResultCode.BAD_REQUEST, "工作流已停用");
         }
-        WorkflowSnapshot snapshot = workflowSnapshotService.lambdaQuery()
+        WorkflowSnapshot pointer = workflowSnapshotService.lambdaQuery()
+                .select(WorkflowSnapshot::getId)
                 .eq(WorkflowSnapshot::getWorkflowId, workflow.getId())
                 .orderByDesc(WorkflowSnapshot::getVersion)
                 .last("LIMIT 1")
                 .one();
+        if (pointer == null || pointer.getId() == null) {
+            throw new BizException(ResultCode.BAD_REQUEST, "请先发布工作流后再通过调度或 OpenAPI 执行");
+        }
+        WorkflowSnapshot snapshot = snapshotCache.getById(pointer.getId(), workflowSnapshotService::getById);
         if (snapshot == null) {
             throw new BizException(ResultCode.BAD_REQUEST, "请先发布工作流后再通过调度或 OpenAPI 执行");
         }

@@ -11,6 +11,8 @@ import com.qingzhou.modules.component.entity.ApiComponent;
 import com.qingzhou.modules.component.service.ApiComponentService;
 import com.qingzhou.modules.execution.dto.OpenApiExecuteResultVO;
 import com.qingzhou.modules.execution.support.DbResultCleaner;
+import com.qingzhou.modules.execution.support.FailureCategory;
+import com.qingzhou.modules.execution.support.PublicErrorSanitizer;
 import com.qingzhou.modules.openapi.entity.OpenapiApp;
 import com.qingzhou.modules.openapi.security.OpenApiAuthenticator;
 import com.qingzhou.modules.openapi.service.OpenapiAppService;
@@ -58,13 +60,18 @@ public class OpenApiComponentController {
         Map<String, Object> input = unwrapInput(body);
         ComponentTestRequest request = new ComponentTestRequest();
         request.setParams(input);
-        ComponentTestVO test = apiComponentService.test(component.getId(), request);
+        ComponentTestVO test = apiComponentService.test(component.getId(), request, true);
 
+        String status = "SUCCESS";
+        if (!test.isSuccess()) {
+            status = FailureCategory.looksLikeTimeout(test.getMessage()) ? "TIMEOUT" : "FAILED";
+        }
+        Object output = DbResultCleaner.stripRedundant(parseOutput(test.getResponseBody()));
         OpenApiExecuteResultVO result = OpenApiExecuteResultVO.builder()
-                .status(test.isSuccess() ? "SUCCESS" : "FAILED")
+                .status(status)
                 .durationMs(test.getDurationMs())
-                .errorMsg(test.isSuccess() ? null : test.getMessage())
-                .output(DbResultCleaner.stripRedundant(parseOutput(test.getResponseBody())))
+                .errorMsg(test.isSuccess() ? null : PublicErrorSanitizer.forOpenApi(status, test.getMessage()))
+                .output(output)
                 .build();
 
         auditLogService.record(

@@ -54,6 +54,9 @@ public final class HttpUrlSupport {
             } else {
                 Object found = payload == null ? null : payload.get(key);
                 value = found == null ? "" : String.valueOf(found);
+                if (containsControlChar(value)) {
+                    throw new BizException(ResultCode.BAD_REQUEST, "URL 参数包含非法控制字符");
+                }
             }
             matcher.appendReplacement(sb, Matcher.quoteReplacement(value));
         }
@@ -74,11 +77,34 @@ public final class HttpUrlSupport {
         return builder.encode().build(true).toUri();
     }
 
+    private static final java.util.regex.Pattern SECRET_QUERY = java.util.regex.Pattern.compile(
+            "(?i)([?&](?:access_token|corpsecret|corp_secret|client_secret|password|passwd|secret|token|api_key|apikey|signature|sign|authorization)=)[^&#\\s]*");
+    private static final java.util.regex.Pattern SECRET_JSON = java.util.regex.Pattern.compile(
+            "(?i)(\"(?:password|passwd|secret|token|cipher|authorization|api_key|apikey|private_key|client_secret|access_token|corpsecret)\"\\s*:\\s*\")(?:\\\\.|[^\"\\\\])*\"");
+
     public static String maskSecret(String url) {
         if (url == null) {
             return null;
         }
-        return url.replaceAll("(?i)(access_token=)[^&]*", "$1***");
+        return SECRET_QUERY.matcher(url).replaceAll("$1***");
+    }
+
+    /** 写入节点日志前脱敏并截断，不影响真正发出的请求体。 */
+    public static String maskLoggedBody(String body) {
+        if (body == null) {
+            return null;
+        }
+        return SECRET_JSON.matcher(truncateBody(body)).replaceAll("$1***\"");
+    }
+
+    private static boolean containsControlChar(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c <= 0x1F || c == 0x7F) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static String truncateBody(String body) {

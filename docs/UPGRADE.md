@@ -19,6 +19,16 @@ mysql -h$DB_HOST -u$DB_USERNAME -p$DB_PASSWORD $DB_NAME < sql/V6__product_founda
 
 然后重启后端。首次访问会提示「创建管理员」（若库中尚无用户）。
 
+## 升级到 V11（执行列表索引）
+
+已有库执行一次即可（脚本会判断索引是否已存在）：
+
+```bash
+mysql -h$DB_HOST -u$DB_USERNAME -p$DB_PASSWORD $DB_NAME < sql/V11__execution_list_index.sql
+```
+
+新库若用 Compose 初始化，需在首次建库时挂载该脚本；已经初始化过的数据卷不会自动补跑。
+
 ## 配置变更
 
 新增环境变量（见 `.env.example`）：

@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -28,6 +29,7 @@ public class OpenApiSignatureFilter extends OncePerRequestFilter {
 
     private final OpenApiAuthenticator authenticator;
     private final OpenApiAccessGuard accessGuard;
+    private final OpenApiIdempotencyStore idempotencyStore;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -48,16 +50,51 @@ public class OpenApiSignatureFilter extends OncePerRequestFilter {
             String timestamp = wrapped.getHeader(SignatureUtil.HEADER_TIMESTAMP);
             String nonce = wrapped.getHeader(SignatureUtil.HEADER_NONCE);
             String signature = wrapped.getHeader(SignatureUtil.HEADER_SIGNATURE);
-            var app = authenticator.authenticate(appKey, timestamp, nonce, signature, wrapped.bodyAsString());
+            String body = wrapped.bodyAsString();
+            var app = authenticator.authenticate(appKey, timestamp, nonce, signature, body);
             accessGuard.check(app, wrapped);
             wrapped.setAttribute(OpenApiAuthenticator.ATTR_APP, app);
-            filterChain.doFilter(wrapped, response);
+            String idemKey = OpenApiIdempotency.normalizeKey(wrapped.getHeader(OpenApiIdempotency.HEADER));
+            if (idemKey != null) {
+                OpenApiIdempotency.Packed replay = idempotencyStore.replay(
+                        app.getAppKey(), wrapped.getMethod(), wrapped.getRequestURI(), idemKey, body);
+                if (replay != null) {
+                    writeReplay(response, replay);
+                    return;
+                }
+            }
+            ContentCachingResponseWrapper caching = new ContentCachingResponseWrapper(response);
+            try {
+                filterChain.doFilter(wrapped, caching);
+                if (idemKey != null) {
+                    byte[] captured = caching.getContentAsByteArray();
+                    String responseBody = new String(captured, StandardCharsets.UTF_8);
+                    idempotencyStore.store(
+                            app.getAppKey(),
+                            wrapped.getMethod(),
+                            wrapped.getRequestURI(),
+                            idemKey,
+                            body,
+                            caching.getStatus(),
+                            responseBody);
+                }
+            } finally {
+                caching.copyBodyToResponse();
+            }
         } catch (BizException ex) {
             writeError(response, ex.getCode(), ex.getMessage());
         } catch (Exception ex) {
             log.error("OpenAPI 网关异常", ex);
             writeError(response, 401, "签名校验失败");
         }
+    }
+
+    private void writeReplay(HttpServletResponse response, OpenApiIdempotency.Packed replay) throws IOException {
+        response.setStatus(replay.status() > 0 ? replay.status() : HttpServletResponse.SC_OK);
+        response.setHeader(OpenApiIdempotency.REPLAY_HEADER, "true");
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        response.getWriter().write(replay.body() == null ? "" : replay.body());
     }
 
     private void writeError(HttpServletResponse response, int code, String message) throws IOException {
@@ -74,8 +111,8 @@ public class OpenApiSignatureFilter extends OncePerRequestFilter {
         if (code == 403) {
             return 403;
         }
-        if (code == 400) {
-            return 400;
+        if (code == 400 || code == 409) {
+            return code;
         }
         return HttpServletResponse.SC_UNAUTHORIZED;
     }

@@ -48,6 +48,23 @@ class OutboundUrlGuardTest {
     }
 
     @Test
+    void blocksIpv4MappedLoopbackAndLinkLocal() throws UnknownHostException {
+        InetAddress mappedLoopback = InetAddress.getByName("::ffff:127.0.0.1");
+        assertTrue(OutboundUrlGuard.isBlockedAddress(mappedLoopback, false));
+        InetAddress mappedMetadata = InetAddress.getByName("::ffff:169.254.169.254");
+        assertTrue(OutboundUrlGuard.isBlockedAddress(mappedMetadata, true));
+        assertThrows(BizException.class,
+                () -> OutboundUrlGuard.validate(URI.create("http://[::ffff:127.0.0.1]/"), false));
+    }
+
+    @Test
+    void blocksUniqueLocalIpv6UnlessPrivateAllowed() throws UnknownHostException {
+        InetAddress ula = InetAddress.getByName("fd00::1");
+        assertTrue(OutboundUrlGuard.isBlockedAddress(ula, false));
+        assertFalse(OutboundUrlGuard.isBlockedAddress(ula, true));
+    }
+
+    @Test
     void allowsPublicHttpsWhenPrivateDisallowed() {
         assertDoesNotThrow(() -> OutboundUrlGuard.validate(URI.create("https://qyapi.weixin.qq.com/cgi-bin/gettoken"), false));
     }

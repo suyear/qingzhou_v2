@@ -1,0 +1,92 @@
+# 密钥与连接口令只从环境变量读取，仓库内不放真实值。
+# 本地 / Compose 开发请设置 SPRING_PROFILES_ACTIVE=dev，并注入 AES_KEY、JWT_SECRET、LICENSE_SIGN_KEY。
+server:
+  port: ${SERVER_PORT:18080}
+  tomcat:
+    max-http-form-post-size: 2MB
+    max-swallow-size: 2MB
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+
+spring:
+  application:
+    name: qingzhou
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  datasource:
+    url: jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:qingzhou}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    hikari:
+      pool-name: qingzhou-db
+      maximum-pool-size: ${DB_POOL_MAX:20}
+      minimum-idle: ${DB_POOL_MIN:2}
+      connection-timeout: 8000
+      validation-timeout: 3000
+      idle-timeout: 60000
+      max-lifetime: 1800000
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+qingzhou:
+  crypto:
+    aes-key: ${AES_KEY:}
+  auth:
+    jwt-secret: ${JWT_SECRET:}
+    token-ttl-hours: 12
+    login-max-failures: 8
+    login-lock-seconds: 300
+  license:
+    sign-key: ${LICENSE_SIGN_KEY:}
+  security:
+    trust-proxy: ${TRUST_PROXY:false}
+    allow-default-secrets: false
+  http:
+    allow-private-network: ${HTTP_ALLOW_PRIVATE:false}
+    max-response-bytes: 2097152
+  execution:
+    max-parallel: 8
+  openapi:
+    public-base-url: ${OPENAPI_PUBLIC_BASE_URL:}
+    nonce-ttl-seconds: 300
+    idempotency-ttl-seconds: 86400
+  wecom:
+    token-url: https://qyapi.weixin.qq.com/cgi-bin/gettoken
+    fetch-retry: 2
+    token-expire-skew-seconds: 300
+    lock-ttl-seconds: 10
+    lock-retry: 8
+    lock-wait-ms: 200
+  xxl:
+    admin-addresses: ${XXL_ADMIN_ADDRESSES:}
+    access-token: ${XXL_ACCESS_TOKEN:}
+    executor:
+      appname: qingzhou-executor
+      port: 9999
+      log-path: /tmp/xxl-job
+      log-retention-days: 7

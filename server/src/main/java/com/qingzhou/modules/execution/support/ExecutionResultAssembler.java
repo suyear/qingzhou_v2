@@ -13,6 +13,7 @@ import com.qingzhou.modules.workflow.entity.Workflow;
 import com.qingzhou.modules.workflow.entity.WorkflowSnapshot;
 import com.qingzhou.modules.workflow.service.WorkflowService;
 import com.qingzhou.modules.workflow.service.WorkflowSnapshotService;
+import com.qingzhou.modules.workflow.support.WorkflowSnapshotCache;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -29,6 +30,7 @@ public class ExecutionResultAssembler {
     private final ObjectMapper objectMapper;
     private final WorkflowSnapshotService workflowSnapshotService;
     private final WorkflowService workflowService;
+    private final WorkflowSnapshotCache snapshotCache;
 
     /** 编排试跑 / 立即触发：含步骤摘要，便于内部排障 */
     public RunResultVO from(ExecutionVO vo) {
@@ -75,12 +77,13 @@ public class ExecutionResultAssembler {
                     .build();
         }
         ExecutionInstance instance = vo.getInstance();
+        String status = instance.getStatus();
         return OpenApiExecuteResultVO.builder()
                 .executionId(instance.getId())
                 .executionNo(instance.getExecutionNo())
-                .status(instance.getStatus())
+                .status(status)
                 .durationMs(instance.getDurationMs())
-                .errorMsg(instance.getErrorMsg())
+                .errorMsg("SUCCESS".equals(status) ? null : PublicErrorSanitizer.forOpenApi(status, instance.getErrorMsg()))
                 .output(projectPublicOutput(vo))
                 .build();
     }
@@ -241,7 +244,7 @@ public class ExecutionResultAssembler {
         Map<String, NodeIoMeta> result = new LinkedHashMap<>();
         String graphJson = null;
         if (instance.getSnapshotId() != null) {
-            WorkflowSnapshot snapshot = workflowSnapshotService.getById(instance.getSnapshotId());
+            WorkflowSnapshot snapshot = loadSnapshot(instance.getSnapshotId());
             if (snapshot != null) {
                 graphJson = snapshot.getGraphJson();
             }
@@ -456,13 +459,17 @@ public class ExecutionResultAssembler {
         return byName;
     }
 
+    private WorkflowSnapshot loadSnapshot(Long snapshotId) {
+        return snapshotCache.getById(snapshotId, workflowSnapshotService::getById);
+    }
+
     private Map<String, Object> resolveOutputSchema(ExecutionInstance instance) {
         if (instance == null) {
             return null;
         }
         String json = null;
         if (instance.getSnapshotId() != null) {
-            WorkflowSnapshot snapshot = workflowSnapshotService.getById(instance.getSnapshotId());
+            WorkflowSnapshot snapshot = loadSnapshot(instance.getSnapshotId());
             if (snapshot != null) {
                 json = snapshot.getOutputSchema();
             }

@@ -24,7 +24,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
         registry.addMapping("/openapi/**")
                 .allowedOriginPatterns("*")
                 .allowedMethods("GET", "POST", "OPTIONS")
-                .allowedHeaders("Content-Type", "X-App-Key", "X-Timestamp", "X-Nonce", "X-Signature", "Authorization")
+                .allowedHeaders("Content-Type", "X-App-Key", "X-Timestamp", "X-Nonce", "X-Signature", "X-Idempotency-Key", "Authorization")
                 .allowCredentials(false)
                 .maxAge(3600);
     }

@@ -51,10 +51,14 @@ public class LocalCronRegistrar {
             log.info("已配置 XXL-JOB Admin，内置调度关闭");
             return;
         }
-        scheduleJobService.lambdaQuery()
-                .eq(ScheduleJob::getStatus, 1)
-                .list()
-                .forEach(this::register);
+        try {
+            scheduleJobService.lambdaQuery()
+                    .eq(ScheduleJob::getStatus, 1)
+                    .list()
+                    .forEach(this::register);
+        } catch (Exception ex) {
+            log.error("恢复本地调度失败，进程继续启动，待数据库可用后可在调度页重新启用任务", ex);
+        }
     }
 
     public void register(ScheduleJob job) {

@@ -15,6 +15,7 @@ import com.qingzhou.modules.component.entity.ApiComponent;
 import com.qingzhou.modules.component.mapper.ApiComponentMapper;
 import com.qingzhou.modules.component.service.ApiComponentService;
 import com.qingzhou.modules.execution.engine.DatabaseComponentSupport;
+import com.qingzhou.modules.execution.engine.ExecutionLimits;
 import com.qingzhou.modules.execution.engine.DbCallResult;
 import com.qingzhou.modules.execution.engine.HttpAuthSupport;
 import com.qingzhou.modules.execution.engine.HttpCallResult;
@@ -102,6 +103,11 @@ public class ApiComponentServiceImpl extends ServiceImpl<ApiComponentMapper, Api
 
     @Override
     public ComponentTestVO test(Long id, ComponentTestRequest request) {
+        return test(id, request, false);
+    }
+
+    @Override
+    public ComponentTestVO test(Long id, ComponentTestRequest request, boolean preserveResponse) {
         ApiComponent component = getById(id);
         if (component == null) {
             throw new BizException(ResultCode.NOT_FOUND, "接口组件不存在");
@@ -143,7 +149,7 @@ public class ApiComponentServiceImpl extends ServiceImpl<ApiComponentMapper, Api
         }
         uri = HttpAuthSupport.appendQueryParams(uri, auth.queryParams());
 
-        int timeout = component.getTimeoutMs() == null ? 10000 : component.getTimeoutMs();
+        int timeout = ExecutionLimits.nodeTimeout(component.getTimeoutMs());
         Map<String, String> headers = new LinkedHashMap<>();
         headers.put("Accept", "application/json");
         headers.putAll(auth.headers());
@@ -160,7 +166,7 @@ public class ApiComponentServiceImpl extends ServiceImpl<ApiComponentMapper, Api
         vo.setRequestUrl(HttpUrlSupport.maskSecret(uri.toString()));
         vo.setHttpStatus(result.status() == 0 ? null : result.status());
         vo.setDurationMs(duration);
-        vo.setResponseBody(HttpUrlSupport.truncateBody(result.body()));
+        vo.setResponseBody(preserveResponse ? result.body() : HttpUrlSupport.truncateBody(result.body()));
 
         Integer wecomCode = readWecomErrcode(result.body());
         String wecomMsg = readWecomErrmsg(result.body());
@@ -200,7 +206,7 @@ public class ApiComponentServiceImpl extends ServiceImpl<ApiComponentMapper, Api
         } catch (BizException ex) {
             return ComponentTestVO.fail(ex.getMessage());
         }
-        int timeout = component.getTimeoutMs() == null ? 10000 : component.getTimeoutMs();
+        int timeout = ExecutionLimits.nodeTimeout(component.getTimeoutMs());
         long started = System.currentTimeMillis();
         DbCallResult result = nodeJdbcInvoker.invoke(spec, params, timeout);
         long duration = System.currentTimeMillis() - started;
